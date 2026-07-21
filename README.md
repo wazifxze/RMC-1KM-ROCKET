@@ -1,3 +1,5 @@
+this project is still in early phase, more improvement in future in imminent
+
 1. The Mission Overview
 The primary goal of this aerospace payload is to launch a compact, soda-can-sized satellite (CanSat) inside a rocket, collect high-frequency flight dynamics and environmental data during ascent and descent, write that data to a local "Black Box" flight recorder, and transmit it live to a ground computer.
 
