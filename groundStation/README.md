@@ -1,32 +1,26 @@
-The onboard firmware runs on the dual-core Seeed Studio XIAO ESP32-S3 inside the rocket using C++.
+The ground control script runs on your team's laptop, listening to a second LoRa module plugged into a USB port. use python
 
-Core Architecture & Dual-Core Threading
-The code uses FreeRTOS (an embedded real-time operating system) to split duties between the microcontroller's two processing cores:
+The script uses pyserial to read the live radio text stream coming through the USB port, and vpython (a 3D rendering library) to render a live, interactive 3D environment.
 
-Core 1 (High Priority - Sensor Task): 
-    -Executes an uninterrupted loop at $50\text{ Hz}$ ($20\text{ms}$ delay). Its sole job is to pull raw binary data from the BME280 and BMI160 sensors, pack it into a lightweight C++ structure (TelemetryPacket), and drop it into a thread-safe memory queue (telemetryQueue).
 
-Core 0 (Input/Output Task):
-    - Continuously checks the memory queue. When a new packet arrives, Core 0 formats it into a single line of comma-separated text, appends it to the flight log on the Micro SD card, and passes it to the LoRa radio module for transmission.
+Key Python Functions & Logic Explained
 
-Why this matters: 
-    -SD card writes and radio transmissions occasionally experience tiny delays. By isolating those I/O operations on Core 0, Core 1 never lags, ensuring you capture every microsecond of violent movement during launch.
+1. Canvas & Object Setup (vpython):
+    -Creates a dark background viewport and draws an orange 3D cylinder (cansat) representing the physical fiberglass body tube.
+    -Defines scene.up = vector(0,0,1) to establish standard aerospace coordinate space ($Z$-axis pointing straight up into the sky).
 
-Key C++ Functions & Logic Explained
+2. Serial USB Listening Loop (pyserial):
+    -[ser.readline()]: Reads incoming raw bytes from the USB port and converts them into an ASCII string.
+    -[packet.startswith("$CANSAT") and packet.endswith("*")]: Filters out garbled packets caused by background radio static or interference, ensuring only clean data gets processed.
 
-1. [struct TelemetryPacket]: 
-    -A lightweight data container in memory holding packet IDs, timestamps, pressure, temperature, and 6-axis motion values ($A_x, A_y, A_z, G_x, G_y, G_z$).
+3. Data Parsing & Trigonometric Math:
+    -[.replace()] & [.split(",")]: Strips out header tags and splits the comma-separated string into an array of individual numbers (packet_id, ax, ay, az, etc.).
+    -Vector Calculations (math.atan2): Uses basic trigonometry on the raw $X, Y, Z$ acceleration forces to compute exact spatial tilt angles:
+       $$\text{Pitch} = \arctan2\left(A_x, \sqrt{A_y^2 + A_z^2}\right)$$
+       
+       $$\text{Roll} = \arctan2\left(A_y, \sqrt{A_x^2 + A_z^2}\right)$$
 
-2. [TaskSensorSampling()] (Core 1):
-    -[bme.readPressure()] & [bme.readTemperature()]: Queries atmospheric data over $I^2C$.BMI160.
-    -[readAccelerometer()] & [readGyro()]: Reads raw motion variables and divides them by hardware conversion factors (2048.0 for $\pm 16g$ mode, 16.4 for gyroscope angles) to yield standard physical units ($g$-forces and degrees/sec).
-    -[xQueueSend()]: Safely transfers the data structure into the inter-core queue without blocking execution if the queue happens to be momentarily busy
-    
-3. [TaskRadioAndLogging()] (Core 0):
-    -[xQueueReceive()]: Waits until a packet drops into the queue from Core 1.
-    -[csvPacket = "$CANSAT,..."]: Formats the raw numeric values into a strict CSV string wrapped in [$CANSAT] and [*] header/footer markers (so the ground station knows where a packet begins and ends).
-    -[LoRa.beginPacket()] & [LoRa.endPacket(true)]: Sends the text packet out asynchronously over the 433MHz frequency.
-    -[logFile.println()] & [logFile.flush()]: Appends the string to the SD card. [flush()] forces the buffer to commit to physical flash storage every 10 packets so data isn't lost if the battery disconnects upon landing.
-
-4. [setup()]:
-    - Configures system clocks, initializes the $I^2C$ bus at $400\text{ kHz}$ (Fast Mode), sets up the SPI bus with unique Chip Select pins, mounts the file system on the SD card, boots the LoRa radio at max $20\text{ dBm}$ power, and assigns the two tasks to their respective cores using [xTaskCreatePinnedToCore()].
+4. 3D Frame Rendering:
+    -[new_axis_x], [new_axis_y], [new_axis_z]: Combines the calculated Pitch and Roll angles into a 3D unit vector representing the rocket's current spatial orientation.
+    -[cansat.axis = vector(...)]: Updates the 3D cylinder model's spatial orientation in the software window.
+    -[rate(60)]: Locks the program loop to $60\text{ frames per second}$, creating a smooth visual rendering of the rocket tumbling, ascending, and descending in real time on your laptop screen.
