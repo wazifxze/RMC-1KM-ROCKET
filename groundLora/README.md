@@ -1,0 +1,1 @@
+Flash this code onto whichever microcontroller is acting as your ground base station. It receives the raw LoRa packets out of the air and immediately passes them line-by-line over USB to your Python script.
