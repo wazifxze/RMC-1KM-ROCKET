@@ -20,7 +20,7 @@ void setup() {
     LoRa.setPins(LORA_CS_PIN, LORA_RST_PIN, LORA_DIO0_PIN);
 
     // 3. Initialize Radio at 433MHz
-    if (!LoRa.begin(LORA_BANDWIDTH_HZ)) {
+    if (!LoRa.begin(LORA_FREQUENCY_HZ)) {
         Serial.println("[ERROR] Receiver LoRa Init Failed!");
         while (1); // Halt if hardware connection fails
     }
@@ -43,6 +43,15 @@ void loop() {
         // Read all bytes out of the radio buffer
         while (LoRa.available()) {
             incomingPacket += (char)LoRa.read();
+        }
+
+        int rssi = LoRa.packetRssi(); //read recieved signal strength indicator
+        float snr = LoRa.packetSnr(); //read signal noise ratio
+
+        //append rsii and snr to the packet
+        if (incomingPacket.endsWith("*")) {
+            incomingPacket.remove(incomingPacket.length() - 1); // Strip trailing '*'
+            incomingPacket += "," + String(rssi) + "," + String(snr, 1) + "*";
         }
 
         // Forward the RAW telemetry line over USB directly to the Python script
