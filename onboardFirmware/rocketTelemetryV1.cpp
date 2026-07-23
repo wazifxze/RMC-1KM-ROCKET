@@ -145,10 +145,10 @@ void setup() {
     }
 
     if (BMI160.begin(BMI160GenClass::I2C_MODE, Wire, 0x68)) {
-    // EXPLICIT FULL-SCALE RANGE CONFIGURATION
-    // Maps raw 16-bit counts (-32768 to +32767) to match conversion factors:
-    // ±16g  -> 32768 / 16 = 2048 LSB/g  (packet.ax = rawAx / 2048.0f)
-    // ±2000 deg/s -> 32768 / 2000 = 16.384 LSB/(deg/s) (packet.gx = rawGx / 16.4f)
+    
+    // i should expect a possibility of error here
+    // if there is an error while compiling
+    // the function might need 2 arguement according to the fork i installed
     BMI160.setFullScaleAccelRange(BMI160_ACCEL_RANGE_16G);
     BMI160.setFullScaleGyroRange(BMI160_GYRO_RANGE_2000);
     
