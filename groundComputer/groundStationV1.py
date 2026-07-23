@@ -60,7 +60,12 @@ except Exception as e:
 # Atmospheric reference constants
 SEA_LEVEL_PRESSURE = 1013.25  # Standard baseline pressure (hPa)
 yaw_angle = 0.0               # Yaw rotation tracker (Degrees)
-last_time_sec = time.time()
+
+# --- PACKET TIMING & LOSS METRICS ---
+last_timestamp_ms = None
+last_packet_id = None
+total_received = 0
+total_dropped = 0
 
 # ==========================================
 # 3. LIVE RENDER & TELEMETRY PARSING LOOP
@@ -107,15 +112,23 @@ while True:
                 total_expected = total_received + total_dropped
                 loss_percentage = (total_dropped / total_expected * 100.0) if total_expected > 0 else 0.0
 
+                # ---  EXACT YAW INTEGRATION USING ONBOARD DELTA T ---
+                if last_timestamp_ms is not None:
+                    # Calculate true elapsed time on the rocket's hardware timer
+                    dt = (timestamp_ms - last_timestamp_ms) / 1000.0
+                    
+                    # Sanity check: protect against negative/stale timestamps or long disconnections
+                    if 0.0 < dt < 2.0:
+                        yaw_angle += gz * dt
+                
+                last_timestamp_ms = timestamp_ms
+                yaw_rad = math.radians(yaw_angle)
+
                 # --- 1. ORIENTATION & MOTION MATH ---
                 # Calculate Pitch and Roll from Accelerometer G-Forces
                 denom = math.sqrt(ay**2 + az**2)
                 pitch = math.atan2(ax, denom if denom != 0 else 0.001)
-                roll  = math.atan2(ay, math.sqrt(ax**2 + az**2))
-
-                # Integrate Gyroscope Z-axis (gz in deg/s) to track Yaw rotation over time
-                yaw_angle += gz * dt
-                yaw_rad = math.radians(yaw_angle)
+                roll  = math.atan2(ay, math.sqrt(ax**2 + az**2)
 
                 # --- 2. CALCULATE ALTITUDE ---
                 # Standard barometric formula to estimate altitude in meters
