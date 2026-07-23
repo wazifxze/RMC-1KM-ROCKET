@@ -9,7 +9,7 @@
 #define LORA_RST_PIN     1   // Reset
 #define LORA_DIO0_PIN    2   // DIO0 Interrupt
 
-#define LORA_BANDWIDTH_HZ 433E6 // Must match rocket frequency (433MHz)
+#define LORA_FREQUENCY_HZ 433E6 // Must match rocket frequency (433MHz)
 
 void setup() {
     // 1. Initialize USB Serial to PC/Laptop
@@ -28,6 +28,9 @@ void setup() {
     // Match radio settings with the rocket transmitter for maximum link reliability
     LoRa.setSpreadingFactor(7);
     LoRa.setSignalBandwidth(125E3);
+
+    // enable CRC check for data intergrity check
+    LoRa.enableCrc();
 }
 
 void loop() {

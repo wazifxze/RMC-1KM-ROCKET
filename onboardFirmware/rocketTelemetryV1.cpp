@@ -171,6 +171,7 @@ void setup() {
         LoRa.setTxPower(20);          // Max transmission power (20dBm)
         LoRa.setSpreadingFactor(7);   // SF7 for fast data throughput
         LoRa.setSignalBandwidth(125E3);
+        LoRa.enableCrc();
     } else {
         Serial.println("[ERROR] LoRa Ra-02 Init Failed!");
     }
