@@ -144,7 +144,18 @@ void setup() {
         Serial.println("[ERROR] BME280 sensor not detected!");
     }
 
-    BMI160.begin(BMI160GenClass::I2C_MODE, Wire, 0x68);
+    if (BMI160.begin(BMI160GenClass::I2C_MODE, Wire, 0x68)) {
+    // EXPLICIT FULL-SCALE RANGE CONFIGURATION
+    // Maps raw 16-bit counts (-32768 to +32767) to match conversion factors:
+    // ±16g  -> 32768 / 16 = 2048 LSB/g  (packet.ax = rawAx / 2048.0f)
+    // ±2000 deg/s -> 32768 / 2000 = 16.384 LSB/(deg/s) (packet.gx = rawGx / 16.4f)
+    BMI160.setFullScaleAccelRange(BMI160_ACCEL_RANGE_16G);
+    BMI160.setFullScaleGyroRange(BMI160_GYRO_RANGE_2000);
+    
+    Serial.println("[INFO] BMI160 Initialized: Accel set to ±16g | Gyro set to ±2000dps");
+    } else {
+    Serial.println("[ERROR] BMI160 IMU Init Failed!");
+}
 
     // 2. Initialize Shared SPI Bus
     SPI.begin(SPI_SCK_PIN, SPI_MISO_PIN, SPI_MOSI_PIN);

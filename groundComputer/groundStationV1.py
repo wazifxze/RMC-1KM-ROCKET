@@ -96,6 +96,17 @@ while True:
                 gy          = float(fields[8])
                 gz          = float(fields[9])
 
+                # --- PACKET LOSS CALCULATION ---
+                total_received += 1
+                if last_packet_id is not None:
+                    gap = packet_id - (last_packet_id + 1)
+                    if gap > 0:
+                        total_dropped += gap  # Gap detected in sequence
+                last_packet_id = packet_id
+
+                total_expected = total_received + total_dropped
+                loss_percentage = (total_dropped / total_expected * 100.0) if total_expected > 0 else 0.0
+
                 # --- 1. ORIENTATION & MOTION MATH ---
                 # Calculate Pitch and Roll from Accelerometer G-Forces
                 denom = math.sqrt(ay**2 + az**2)
@@ -129,8 +140,8 @@ while True:
                 telemetry_label.text = (
                     f"--- ROCKET TELEMETRY LINK ACTIVE ---\n"
                     f"Packet ID: {packet_id} | Time: {timestamp_ms / 1000.0:.2f} s\n"
-                    f"Altitude: {altitude:.1f} m | Pressure: {pressure:.2f} hPa\n"
-                    f"Temp: {temperature:.1f} °C\n"
+                    f"Rx Count: {total_received} | Dropped: {total_dropped} | Loss: {loss_percentage:.1f}%\n"
+                    f"Altitude: {altitude:.1f} m | Pressure: {pressure:.2f} hPa | Temp: {temperature:.1f} °C\n"
                     f"Pitch: {math.degrees(pitch):.1f}° | Roll: {math.degrees(roll):.1f}° | Yaw: {yaw_angle:.1f}°\n"
                     f"Accel [G]: [{ax:.2f}, {ay:.2f}, {az:.2f}]\n"
                     f"Gyro [°/s]: [{gx:.1f}, {gy:.1f}, {gz:.1f}]"
