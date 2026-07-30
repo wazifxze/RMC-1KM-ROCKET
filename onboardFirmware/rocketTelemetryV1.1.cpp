@@ -6,6 +6,7 @@
 #include <Adafruit_Sensor.h>
 #include <Adafruit_BME280.h>
 #include <BMI160Gen.h>
+#include <TinyGPSPlus.h>
 
 // ==========================================
 //  PIN DEFINITIONS (Seeed Studio XIAO ESP32-S3)
@@ -22,6 +23,11 @@
 #define LORA_RST_PIN     1  // D0
 #define LORA_DIO0_PIN    2  // D1
 
+#define GPS_RX_PIN  44   // D7
+#define GPS_TX_PIN  43   // D6
+HardwareSerial GPSSerial(1);
+TinyGPSPlus gps;
+
 // ==========================================
 //  TELEMETRY DATA STRUCTURE
 // ==========================================
@@ -32,6 +38,10 @@ struct TelemetryPacket {
     float temperature;   // Deg C
     float ax, ay, az;    // G-forces (m/s^2 or g)
     float gx, gy, gz;    // Angular velocity (deg/s)
+    double gps_lat, gps_lon;
+    float  gps_alt;
+    uint8_t gps_satellites;
+    bool   gps_fix_valid;
 };
 
 // FreeRTOS Queue for Thread-Safe Inter-Core Transfer
@@ -74,6 +84,16 @@ void TaskSensorSampling(void *pvParameters) {
         packet.gy = (float)rawGy / 16.4f;
         packet.gz = (float)rawGz / 16.4f;
 
+        while (GPSSerial.available()) {
+        gps.encode(GPSSerial.read());
+}
+        //read GPS module
+        packet.gps_fix_valid  = gps.location.isValid();
+        packet.gps_lat        = packet.gps_fix_valid ? gps.location.lat() : 0.0;
+        packet.gps_lon        = packet.gps_fix_valid ? gps.location.lng() : 0.0;
+        packet.gps_alt        = gps.altitude.isValid() ? gps.altitude.meters() : 0.0f;
+        packet.gps_satellites = gps.satellites.value();
+
         // 3. Push packet to inter-core queue (Don't block if full)
         xQueueSend(telemetryQueue, &packet, 0);
 
@@ -93,8 +113,9 @@ void TaskRadioAndLogging(void *pvParameters) {
         if (xQueueReceive(telemetryQueue, &packet, portMAX_DELAY) == pdTRUE) {
             
             // Format packet as flat CSV string for transmission
-            // Format: $CANSAT,id,time_ms,press,temp,ax,ay,az,gx,gy,gz*
-            String csvPacket = "$CANSAT,";
+            // Format: $CANSAT,id,time_ms,press,temp,ax,ay,az,gx,gy,gz,gps_fix_valid,gps_lat,gps_lon,gps_alt,gps_satellites
+
+            string csvPacket  = "$CANSAT,";
             csvPacket += String(packet.packet_id) + ",";
             csvPacket += String(packet.timestamp_ms) + ",";
             csvPacket += String(packet.pressure, 2) + ",";
@@ -104,7 +125,12 @@ void TaskRadioAndLogging(void *pvParameters) {
             csvPacket += String(packet.az, 2) + ",";
             csvPacket += String(packet.gx, 2) + ",";
             csvPacket += String(packet.gy, 2) + ",";
-            csvPacket += String(packet.gz, 2);
+            csvPacket += String(packet.gz, 2) + ",";
+            csvPacket += String(packet.gps_fix_valid? 1 : 0) + ",";
+            csvPacket += String(packet.gps_lat, 6) + ",";
+            csvPacket += String(packet.gps_lon, 6) + ",";
+            csvPacket += String(packet.gps_alt, 1) + ",";
+            csvPacket += String(packet.gps_satellites);
             csvPacket += "*";
 
             // 1. Transmit Packet over LoRa Ra-02 (433MHz)
@@ -133,6 +159,9 @@ void setup() {
     Serial.begin(115200);
     delay(1000); // Allow hardware lines to settle
 
+    //setup GPS communication protocol
+    GPSSerial.begin(9600, SERIAL_8N1, GPS_RX_PIN, GPS_TX_PIN);
+
     // Initialize Thread-Safe Queue (Holds up to 20 packets)
     telemetryQueue = xQueueCreate(20, sizeof(TelemetryPacket));
 
@@ -155,7 +184,7 @@ void setup() {
     Serial.println("[INFO] BMI160 Initialized: Accel set to ±16g | Gyro set to ±2000dps");
     } else {
     Serial.println("[ERROR] BMI160 IMU Init Failed!");
-}
+    }
 
     // 2. Initialize Shared SPI Bus
     SPI.begin(SPI_SCK_PIN, SPI_MISO_PIN, SPI_MOSI_PIN);
@@ -180,44 +209,10 @@ void setup() {
     if (LoRa.begin(433E6)) { // 433MHz frequency
         loraInitialized = true;
         LoRa.setTxPower(20);          // Max transmission power (20dBm)
-      else {
-        Serial.println("[ERROR] LoRa Ra-02 Init Failed!");
-    }
-
-    // ==========================================
-    //  FREERTOS DUAL-CORE TASK PINNING
-    // ==========================================
-    
-    // Pin Sensor Sampling to Core 1 (High priority: 2)
-    xTaskCreatePinnedToCore(
-        TaskSensorSampling,   // Function pointer
-        "SamplingTask",       // Task name
-        4096,                 // Stack size
-        NULL,                 // Parameters
-        2,                    // Priority
-        NULL,                 // Task handle
-        1                     // Core 1
-    );
-
-    // Pin IO (Radio + SD) to Core 0 (Lower priority: 1)
-    xTaskCreatePinnedToCore(
-        TaskRadioAndLogging,  // Function pointer
-        "DownlinkTask",       // Task name
-        8192,                 // Stack size
-        NULL,                 // Parameters
-        1,                    // Priority
-        NULL,                 // Task handle
-        0                     // Core 0
-    );
-}
-
-void loop() {
-    // Empty: Main execution loop is completely offloaded to FreeRTOS tasks!
-    vTaskDelete(NULL);
-}   LoRa.setSpreadingFactor(7);   // SF7 for fast data throughput
+        LoRa.setSpreadingFactor(7);   // SF7 for fast data throughput
         LoRa.setSignalBandwidth(125E3);
         LoRa.enableCrc();
-    } else {
+    }else {
         Serial.println("[ERROR] LoRa Ra-02 Init Failed!");
     }
 

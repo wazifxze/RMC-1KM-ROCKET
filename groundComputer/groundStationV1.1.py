@@ -82,8 +82,8 @@ while True:
                 clean_payload = line[8:-1]
                 fields = clean_payload.split(",")
 
-                packet_id    = int(fields[0])
-                timestamp_ms = int(fields[1])
+                packet_id    = int  (fields[0])
+                timestamp_ms = int  (fields[1])
                 pressure     = float(fields[2])
                 temperature  = float(fields[3])
                 ax           = float(fields[4])
@@ -92,8 +92,13 @@ while True:
                 gx           = float(fields[7])
                 gy           = float(fields[8])
                 gz           = float(fields[9])
-                rssi         = int(fields[10])   if len(fields) > 10 else -1
-                snr          = float(fields[11]) if len(fields) > 11 else 0.0
+                gps_fix      = int  (fields[10])
+                gps_lat      = float(fields[11])
+                gps_lon      = float(fields[12])
+                gps_alt      = float(fields[13])
+                gps_sats     = int  (fields[14])
+                rssi         = int  (fields[15])  if len(fields) > 15 else -1
+                snr          = float(fields[16])  if len(fields) > 16 else 0.0
 
                 # --- 1. PACKET LOSS TRACKER ---
                 total_received += 1
