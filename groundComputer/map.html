@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Recovery Tracker</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" />
+<style>
+  :root {
+    --bg: #0a0e14;
+    --panel: #10161f;
+    --panel-border: #1f2b3a;
+    --text: #e8edf2;
+    --muted: #6b7785;
+    --live: #39ff88;
+    --warn: #ffb020;
+    --trail: #4fd1ff;
+    --mono: "JetBrains Mono", "SF Mono", "Consolas", monospace;
+    --sans: -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0;
+    height: 100%;
+    background: var(--bg);
+    font-family: var(--sans);
+    color: var(--text);
+  }
+
+  #map {
+    position: absolute;
+    inset: 0;
+    background: var(--bg);
+  }
+
+  /* Dark tile filter so OSM's bright default tiles don't blow out at night / on a field laptop */
+  .leaflet-tile-pane {
+    filter: brightness(0.65) contrast(1.15) saturate(0.75);
+  }
+
+  #hud {
+    position: absolute;
+    top: 16px;
+    left: 16px;
+    z-index: 1000;
+    width: 300px;
+    background: rgba(16, 22, 31, 0.92);
+    border: 1px solid var(--panel-border);
+    border-radius: 10px;
+    padding: 16px 18px;
+    backdrop-filter: blur(6px);
+    box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+  }
+
+  #hud .eyebrow {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.12em;
+    color: var(--muted);
+    text-transform: uppercase;
+    margin-bottom: 6px;
+  }
+
+  #hud .title-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 14px;
+  }
+
+  #hud .title-row h1 {
+    font-size: 15px;
+    margin: 0;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+  }
+
+  .dot {
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    background: var(--warn);
+    flex-shrink: 0;
+  }
+
+  .dot.live {
+    background: var(--live);
+    animation: pulse 1.6s ease-in-out infinite;
+  }
+
+  @keyframes pulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(57,255,136,0.55); }
+    50%      { box-shadow: 0 0 0 6px rgba(57,255,136,0); }
+  }
+
+  .row {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    padding: 6px 0;
+    border-top: 1px solid var(--panel-border);
+    font-family: var(--mono);
+    font-size: 12.5px;
+  }
+
+  .row:first-of-type { border-top: none; }
+
+  .row .label {
+    color: var(--muted);
+    letter-spacing: 0.02em;
+  }
+
+  .row .value {
+    color: var(--text);
+    font-weight: 500;
+  }
+
+  .row .value.warn { color: var(--warn); }
+  .row .value.live { color: var(--live); }
+
+  #stale-banner {
+    display: none;
+    margin-top: 12px;
+    padding: 8px 10px;
+    background: rgba(255, 176, 32, 0.12);
+    border: 1px solid rgba(255, 176, 32, 0.35);
+    border-radius: 6px;
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--warn);
+    letter-spacing: 0.02em;
+  }
+
+  .leaflet-control-attribution {
+    background: rgba(10,14,20,0.7) !important;
+    color: var(--muted) !important;
+  }
+  .leaflet-control-attribution a { color: var(--muted) !important; }
+</style>
+</head>
+<body>
+
+<div id="map"></div>
+
+<div id="hud">
+  <div class="eyebrow">Recovery Tracker</div>
+  <div class="title-row">
+    <div id="fix-dot" class="dot"></div>
+    <h1 id="fix-title">Waiting for fix&hellip;</h1>
+  </div>
+
+  <div class="row"><span class="label">Latitude</span><span id="v-lat" class="value">&mdash;</span></div>
+  <div class="row"><span class="label">Longitude</span><span id="v-lon" class="value">&mdash;</span></div>
+  <div class="row"><span class="label">GPS altitude</span><span id="v-alt" class="value">&mdash;</span></div>
+  <div class="row"><span class="label">Satellites</span><span id="v-sats" class="value">&mdash;</span></div>
+  <div class="row"><span class="label">Last update</span><span id="v-age" class="value">&mdash;</span></div>
+
+  <div id="stale-banner">No update in over 5s &mdash; check radio link / laptop connection</div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script>
+  const map = L.map('map', { zoomControl: true, attributionControl: true }).setView([0, 0], 3);
+  // Offline mode: tiles are served locally by gps_map_server.py from the
+  // pre-downloaded 'tiles/' folder (see download_tiles.py). No internet needed.
+  L.tileLayer('/tiles/{z}/{x}/{y}.png', {
+    maxZoom: 19,
+    minZoom: 12,
+    attribution: 'Map data &copy; OpenStreetMap contributors (offline cache)'
+  }).addTo(map);
+
+  const rocketIcon = L.divIcon({
+    className: '',
+    html: `<div style="
+      width:16px;height:16px;border-radius:50%;
+      background:#39ff88;border:2px solid #0a0e14;
+      box-shadow:0 0 10px rgba(57,255,136,0.8);
+    "></div>`,
+    iconSize: [16, 16],
+    iconAnchor: [8, 8]
+  });
+
+  let marker = null;
+  let trailLine = L.polyline([], { color: '#4fd1ff', weight: 3, opacity: 0.85 }).addTo(map);
+  let hasCentered = false;
+
+  function fmtAge(lastUpdateWall) {
+    if (lastUpdateWall === null) return { text: '—', stale: false };
+    const ageSec = (Date.now() / 1000) - lastUpdateWall;
+    const stale = ageSec > 5;
+    if (ageSec < 1) return { text: 'just now', stale };
+    return { text: `${ageSec.toFixed(1)}s ago`, stale };
+  }
+
+  async function poll() {
+    try {
+      const res = await fetch('/gps.json', { cache: 'no-store' });
+      const d = await res.json();
+
+      const dot = document.getElementById('fix-dot');
+      const title = document.getElementById('fix-title');
+      const staleBanner = document.getElementById('stale-banner');
+
+      if (d.fix && d.lat !== null && d.lon !== null && !(d.lat === 0 && d.lon === 0)) {
+        dot.classList.add('live');
+        title.textContent = 'Live fix';
+
+        document.getElementById('v-lat').textContent = d.lat.toFixed(6) + '°';
+        document.getElementById('v-lon').textContent = d.lon.toFixed(6) + '°';
+        document.getElementById('v-alt').textContent = d.alt.toFixed(1) + ' m';
+        document.getElementById('v-sats').textContent = d.sats;
+
+        const pos = [d.lat, d.lon];
+        if (!marker) {
+          marker = L.marker(pos, { icon: rocketIcon }).addTo(map);
+        } else {
+          marker.setLatLng(pos);
+        }
+
+        if (d.trail && d.trail.length > 0) {
+          trailLine.setLatLngs(d.trail);
+        }
+
+        if (!hasCentered) {
+          map.setView(pos, 17);
+          hasCentered = true;
+        }
+      } else {
+        dot.classList.remove('live');
+        title.textContent = 'No fix';
+        document.getElementById('v-lat').textContent = '—';
+        document.getElementById('v-lon').textContent = '—';
+        document.getElementById('v-alt').textContent = '—';
+        document.getElementById('v-sats').textContent = d.sats ?? '—';
+      }
+
+      const age = fmtAge(d.last_update_wall);
+      document.getElementById('v-age').textContent = age.text;
+      document.getElementById('v-age').className = 'value ' + (age.stale ? 'warn' : '');
+      staleBanner.style.display = age.stale ? 'block' : 'none';
+
+    } catch (err) {
+      document.getElementById('fix-title').textContent = 'Server unreachable';
+    }
+  }
+
+  poll();
+  setInterval(poll, 1200);
+</script>
+
+</body>
+</html>

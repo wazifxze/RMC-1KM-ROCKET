@@ -1,6 +1,10 @@
 import serial
 import math
 from vpython import *
+import gps_map_server
+
+#start gps server for map visualisation
+gps_map_server.start_server(port=8000)
 
 # ==========================================
 # 1. 3D VISUALIZATION CANVAS & SCENE SETUP
@@ -100,6 +104,9 @@ while True:
                 rssi         = int  (fields[15])  if len(fields) > 15 else -1
                 snr          = float(fields[16])  if len(fields) > 16 else 0.0
 
+                #update data to GPS
+                gps_map_server.update_gps(gps_lat, gps_lon, gps_alt, gps_fix, gps_sats, timestamp_ms)
+
                 # --- 1. PACKET LOSS TRACKER ---
                 total_received += 1
                 if last_packet_id is not None:
@@ -168,6 +175,5 @@ while True:
                     f"Pitch: {pitch_deg:.1f}° | Roll: {roll_deg:.1f}° | Yaw: {yaw_deg:.1f}°\n"
                     f"Accel [G]: [{ax:.2f}, {ay:.2f}, {az:.2f}] | Gyro [°/s]: [{gx:.1f}, {gy:.1f}, {gz:.1f}]"
                 )
-
         except Exception as parse_error:
             print(f"[FRAME WARNING] Parse error: {parse_error}")
