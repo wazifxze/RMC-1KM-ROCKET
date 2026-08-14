@@ -115,7 +115,7 @@ void TaskRadioAndLogging(void *pvParameters) {
             // Format packet as flat CSV string for transmission
             // Format: $CANSAT,id,time_ms,press,temp,ax,ay,az,gx,gy,gz,gps_fix_valid,gps_lat,gps_lon,gps_alt,gps_satellites
 
-            string csvPacket  = "$CANSAT,";
+            String csvPacket  = "$CANSAT,";
             csvPacket += String(packet.packet_id) + ",";
             csvPacket += String(packet.timestamp_ms) + ",";
             csvPacket += String(packet.pressure, 2) + ",";
