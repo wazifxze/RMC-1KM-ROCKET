@@ -40,7 +40,8 @@ def deg2num(lat_deg, lon_deg, zoom):
 
 def km_to_tile_span(radius_km, lat_deg, zoom):
     """Rough number of tiles to cover radius_km at this latitude and zoom."""
-    meters_per_tile = 156543.03 * math.cos(math.radians(lat_deg)) / (2 ** zoom)
+    # Multiply by 256 to convert meters/pixel to meters/tile:
+    meters_per_tile = (156543.03 * 256) * math.cos(math.radians(lat_deg)) / (2 ** zoom)
     tiles_needed = (radius_km * 1000) / meters_per_tile
     return max(1, int(math.ceil(tiles_needed)))
 
