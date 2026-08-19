@@ -133,7 +133,7 @@ void TaskRadioAndLogging(void *pvParameters) {
             if (loraInitialized) {
                 LoRa.beginPacket();
                 LoRa.print(csvPacket);
-                LoRa.endPacket(true); 
+                LoRa.endPacket(false); 
             }
 
             // 2. Log Packet to SD Card
