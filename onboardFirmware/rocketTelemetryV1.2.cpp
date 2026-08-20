@@ -131,18 +131,22 @@ void TaskRadioAndLogging(void *pvParameters) {
 
             // 1. Transmit Packet over LoRa
             if (loraInitialized) {
+                Serial.print("Sending LoRa...");
                 LoRa.beginPacket();
                 LoRa.print(csvPacket);
                 LoRa.endPacket(false); 
+                Serial.println(" Done."); 
             }
 
             // 2. Log Packet to SD Card
             if (sdInitialized && logFile) {
+                Serial.print("Writing SD...");
                 logFile.println(csvPacket);
-                if (packet.packet_id % 10 == 0) {
-                    logFile.flush();
-                }
+                if (packet.packet_id % 10 == 0) logFile.flush();
+                Serial.println(" Done.");
             }
+
+            vTaskDelay(pdMS_TO_TICKS(1));
         }
     }
 }
