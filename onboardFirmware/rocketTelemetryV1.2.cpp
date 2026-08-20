@@ -166,13 +166,13 @@ void setup() {
 
     // 1. Initialize Shared I2C Bus
     Wire.begin(I2C_SDA_PIN, I2C_SCL_PIN);
-    Wire.setClock(400000); 
+    Wire.setClock(100000); 
 
     if (!bme.begin(0x76, &Wire) && !bme.begin(0x77, &Wire)) {
         Serial.println("[ERROR] BME280 sensor not detected!");
     }
 
-    if (BMI160.begin(BMI160GenClass::I2C_MODE, Wire, 0x68)) {
+    if (BMI160.begin(BMI160GenClass::I2C_MODE, Wire, 0x69)) {
         BMI160.setFullScaleAccelRange(BMI160_ACCEL_RANGE_16G);
         BMI160.setFullScaleGyroRange(BMI160_GYRO_RANGE_2000);
         Serial.println("[INFO] BMI160 Initialized");
