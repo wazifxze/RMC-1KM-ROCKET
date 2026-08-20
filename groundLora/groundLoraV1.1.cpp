@@ -5,29 +5,31 @@
 //  PIN CONFIGURATION FOR GROUND ESP32
 // ==========================================
 #define LORA_CS_PIN      5   // Chip Select (NSS)
-#define LORA_RST_PIN     14  // Hardware Reset (Avoid GPIO 1)
-#define LORA_DIO0_PIN    2   // DIO0 Interrupt
+#define LORA_RST_PIN     14  // Hardware Reset
+#define LORA_DIO0_PIN    26  // DIO0 Interrupt (Moved off strapping GPIO 2)
 
-#define LORA_SCK_PIN     18  // SPI Clock
-#define LORA_MISO_PIN    19  // SPI Master In Slave Out
-#define LORA_MOSI_PIN    23  // SPI Master Out Slave In
+#define LORA_SCK_PIN     18  // VSPI Clock
+#define LORA_MISO_PIN    19  // VSPI MISO
+#define LORA_MOSI_PIN    23  // VSPI MOSI
 
 #define LORA_FREQUENCY_HZ 433E6 // Must match rocket frequency (433MHz)
 
 void setup() {
     Serial.begin(115200);
-    while (!Serial && millis() < 3000);
+    delay(1000); // Allow UART to stabilize
 
-    // Explicitly initialize SPI pins for Standard ESP32 VSPI
+    // Initialize SPI explicitly for standard ESP32 VSPI
     SPI.begin(LORA_SCK_PIN, LORA_MISO_PIN, LORA_MOSI_PIN, LORA_CS_PIN);
 
     // Configure LoRa module pins
     LoRa.setPins(LORA_CS_PIN, LORA_RST_PIN, LORA_DIO0_PIN);
 
-    // Initialize radio hardware
+    // Initialize Radio Hardware
     if (!LoRa.begin(LORA_FREQUENCY_HZ)) {
-        Serial.println("[ERROR] Receiver LoRa Init Failed!");
-        while (1); 
+        Serial.println("[ERROR] Receiver LoRa Init Failed! Check SPI wiring and 3.3V power.");
+        while (1) {
+            delay(100); // Feed watchdog to prevent TG1WDT reboot loop
+        }
     }
 
     LoRa.setSpreadingFactor(7);
