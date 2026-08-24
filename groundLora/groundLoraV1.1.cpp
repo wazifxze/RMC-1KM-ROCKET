@@ -4,13 +4,13 @@
 // ==========================================
 //  PIN CONFIGURATION FOR GROUND ESP32
 // ==========================================
-#define LORA_CS_PIN      5   // Chip Select (NSS)
-#define LORA_RST_PIN     14  // Hardware Reset
-#define LORA_DIO0_PIN    26  // DIO0 Interrupt (Moved off strapping GPIO 2)
+#define LORA_CS_PIN      4   // D3 (GPIO 4)
+#define LORA_RST_PIN     1   // D0 (GPIO 1)
+#define LORA_DIO0_PIN    2   // D1 (GPIO 2)
 
-#define LORA_SCK_PIN     18  // VSPI Clock
-#define LORA_MISO_PIN    19  // VSPI MISO
-#define LORA_MOSI_PIN    23  // VSPI MOSI
+#define LORA_SCK_PIN     7   // D8 (GPIO 7 - Hardware SPI SCK)
+#define LORA_MISO_PIN    8   // D9 (GPIO 8 - Hardware SPI MISO)
+#define LORA_MOSI_PIN    9   // D10 (GPIO 9 - Hardware SPI MOSI)
 
 #define LORA_FREQUENCY_HZ 433E6 // Must match rocket frequency (433MHz)
 
