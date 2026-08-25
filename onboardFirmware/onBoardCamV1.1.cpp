@@ -49,15 +49,14 @@ bool startCamera() {
     config.pin_pwdn = PWDN_GPIO_NUM;
     config.pin_reset = RESET_GPIO_NUM;
     
-    // OV5640 requires a stable 20MHz XCLK signal to respond on I2C
     config.xclk_freq_hz = 20000000;
     config.pixel_format = PIXFORMAT_JPEG;
     config.grab_mode = CAMERA_GRAB_LATEST;
 
     if (psramFound()) {
         Serial.printf("[INFO] PSRAM Active (%d KB Free). Allocating buffers...\n", ESP.getFreePsram() / 1024);
-        config.frame_size = FRAMESIZE_VGA;  // 640x480 resolution
-        config.jpeg_quality = 12;          // 0-63 (lower = higher quality)
+        config.frame_size = FRAMESIZE_VGA;  
+        config.jpeg_quality = 12;          
         config.fb_count = 2;
         config.fb_location = CAMERA_FB_IN_PSRAM;
     } else {
@@ -74,7 +73,6 @@ bool startCamera() {
         return false;
     }
 
-    // OV5640 Sensor Tweaks
     sensor_t * s = esp_camera_sensor_get();
     if (s != NULL) {
         s->set_vflip(s, 0);
@@ -144,21 +142,28 @@ void setup() {
 
     Serial.println("\n--- ESP32-S3 OV5640 VIDEO RECORDER ---");
 
-    // 1. Initialize OV5640 Camera First
+    // 1. Initialize Camera First
     if (!startCamera()) {
         Serial.println("[FATAL] Camera init failed. Stopping setup.");
         return;
     }
 
-    // 2. Initialize SD Card slot (1-bit SD_MMC mode)
+    // 2. Configure Pin Mapping & Internal Pull-ups for Integrated SD Card Slot
+    pinMode(38, INPUT_PULLUP); // CMD
+    pinMode(40, INPUT_PULLUP); // D0
+    pinMode(39, INPUT_PULLUP); // CLK
+    SD_MMC.setPins(39, 38, 40);
+
+    // 3. Mount SD Card in 1-bit SD_MMC mode
     if (!SD_MMC.begin("/sdcard", true)) {
         Serial.println("[ERROR] SD Card Mount Failed!");
+        Serial.println("[CHECK] Ensure card is formatted to FAT32 with MBR scheme (32GB or smaller).");
         return;
     }
 
     Serial.println("[INFO] SD Card Mounted Successfully.");
 
-    // 3. Begin recording
+    // 4. Begin Video Recording
     recordVideo();
 }
 
