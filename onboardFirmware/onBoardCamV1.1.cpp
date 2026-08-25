@@ -3,7 +3,7 @@
 #include "SD_MMC.h"
 
 // ==========================================
-// 1. CAMERA PIN CONFIGURATION
+// 1. CAMERA PIN MAP (ESP32-S3 CAM Standard Pinout)
 // ==========================================
 #define PWDN_GPIO_NUM     -1
 #define RESET_GPIO_NUM    -1
@@ -49,11 +49,11 @@ void startCamera() {
     config.pin_pwdn = PWDN_GPIO_NUM;
     config.pin_reset = RESET_GPIO_NUM;
     
-    config.xclk_freq_hz = 16000000;
+    // Lower frequency to 10MHz to fix I2C/SCCB camera init timeouts
+    config.xclk_freq_hz = 10000000;
     config.pixel_format = PIXFORMAT_JPEG;
     config.grab_mode = CAMERA_GRAB_LATEST;
 
-    // Smart PSRAM / DRAM Fallback Check
     if (psramFound()) {
         Serial.printf("[INFO] PSRAM Active (%d KB Free). Allocating PSRAM buffers...\n", ESP.getFreePsram() / 1024);
         config.frame_size = FRAMESIZE_VGA;  // 640x480
@@ -62,20 +62,31 @@ void startCamera() {
         config.fb_location = CAMERA_FB_IN_PSRAM;
     } else {
         Serial.println("[WARNING] PSRAM NOT active! Falling back to internal DRAM...");
-        config.frame_size = FRAMESIZE_QVGA; // Lower to 320x240 to fit in DRAM
+        config.frame_size = FRAMESIZE_QVGA; 
         config.jpeg_quality = 15;
         config.fb_count = 1;
         config.fb_location = CAMERA_FB_IN_DRAM;
     }
 
+    // Attempt Camera Init
     esp_err_t err = esp_camera_init(&config);
     if (err != ESP_OK) {
-        Serial.printf("[ERROR] Camera init failed with code 0x%x. Halting.\n", err);
+        Serial.printf("[ERROR] Camera init failed with error code: 0x%x\n", err);
+        Serial.println("[TROUBLESHOOT] 1. Re-seat the gold ribbon cable of the camera.");
+        Serial.println("[TROUBLESHOOT] 2. Ensure camera sensor (OV2640/OV5640) is pressed tightly into socket.");
         while (1) { 
             digitalWrite(LED_INDICATOR_PIN, !digitalRead(LED_INDICATOR_PIN));
-            delay(100); 
+            delay(200); 
         }
     }
+
+    // Adjust camera sensor settings safely after successful init
+    sensor_t * s = esp_camera_sensor_get();
+    if (s != NULL) {
+        s->set_vflip(s, 1); // Flip image vertically if mounted upside down
+        s->set_hmirror(s, 0);
+    }
+
     Serial.println("[INFO] Camera initialized successfully!");
 }
 
@@ -138,7 +149,7 @@ void setup() {
 
     Serial.println("\n--- ESP32-S3 CAM VIDEO RECORDER ---");
 
-    // Configure SD Pins
+    // Initialize SD Card before Camera
     pinMode(38, INPUT_PULLUP);
     pinMode(40, INPUT_PULLUP);
     pinMode(39, INPUT_PULLUP);
@@ -151,7 +162,6 @@ void setup() {
 
     Serial.println("[INFO] SD Card Mounted Successfully.");
 
-    // Start Camera after SD initialization
     startCamera();
     recordVideo();
 }
