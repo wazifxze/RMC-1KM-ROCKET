@@ -3,25 +3,25 @@
 #include "SD_MMC.h"
 
 // ==========================================
-// INTEGRATED ESP32-S3 CAM + SD PINOUT
+// OV5640 ESP32-S3 INTEGRATED BOARD PINOUT
 // ==========================================
 #define PWDN_GPIO_NUM     -1
 #define RESET_GPIO_NUM    -1
-#define XCLK_GPIO_NUM     10
-#define SIOD_GPIO_NUM     17  // SCCB Data line
-#define SIOC_GPIO_NUM     18  // SCCB Clock line
+#define XCLK_GPIO_NUM     15
+#define SIOD_GPIO_NUM      4  // SCCB Data
+#define SIOC_GPIO_NUM      5  // SCCB Clock
 
-#define Y9_GPIO_NUM       11
-#define Y8_GPIO_NUM       9
-#define Y7_GPIO_NUM       8
-#define Y6_GPIO_NUM       6
-#define Y5_GPIO_NUM       4
-#define Y4_GPIO_NUM       2
-#define Y3_GPIO_NUM       1
-#define Y2_GPIO_NUM       5
-#define VSYNC_GPIO_NUM    13
-#define HREF_GPIO_NUM     12
-#define PCLK_GPIO_NUM     7
+#define Y9_GPIO_NUM       16
+#define Y8_GPIO_NUM       17
+#define Y7_GPIO_NUM       18
+#define Y6_GPIO_NUM       12
+#define Y5_GPIO_NUM       10
+#define Y4_GPIO_NUM        8
+#define Y3_GPIO_NUM        9
+#define Y2_GPIO_NUM       11
+#define VSYNC_GPIO_NUM     6
+#define HREF_GPIO_NUM      7
+#define PCLK_GPIO_NUM     13
 
 #define LED_INDICATOR_PIN  2 
 
@@ -49,14 +49,15 @@ bool startCamera() {
     config.pin_pwdn = PWDN_GPIO_NUM;
     config.pin_reset = RESET_GPIO_NUM;
     
-    config.xclk_freq_hz = 16000000;
+    // OV5640 requires a stable 20MHz XCLK signal to respond on I2C
+    config.xclk_freq_hz = 20000000;
     config.pixel_format = PIXFORMAT_JPEG;
     config.grab_mode = CAMERA_GRAB_LATEST;
 
     if (psramFound()) {
-        Serial.printf("[INFO] PSRAM Active (%d KB Free). Allocating PSRAM buffers...\n", ESP.getFreePsram() / 1024);
-        config.frame_size = FRAMESIZE_VGA;  // 640x480
-        config.jpeg_quality = 12;
+        Serial.printf("[INFO] PSRAM Active (%d KB Free). Allocating buffers...\n", ESP.getFreePsram() / 1024);
+        config.frame_size = FRAMESIZE_VGA;  // 640x480 resolution
+        config.jpeg_quality = 12;          // 0-63 (lower = higher quality)
         config.fb_count = 2;
         config.fb_location = CAMERA_FB_IN_PSRAM;
     } else {
@@ -73,7 +74,14 @@ bool startCamera() {
         return false;
     }
 
-    Serial.println("[INFO] Camera initialized successfully!");
+    // OV5640 Sensor Tweaks
+    sensor_t * s = esp_camera_sensor_get();
+    if (s != NULL) {
+        s->set_vflip(s, 0);
+        s->set_hmirror(s, 0);
+    }
+
+    Serial.println("[INFO] OV5640 Camera initialized successfully!");
     return true;
 }
 
@@ -101,7 +109,7 @@ void recordVideo() {
         camera_fb_t * fb = esp_camera_fb_get();
         
         if (!fb || !fb->buf || fb->len == 0) {
-            Serial.println("[WARNING] Camera frame empty! Skipping...");
+            Serial.println("[WARNING] Empty frame! Skipping...");
             if (fb) esp_camera_fb_return(fb);
             delay(10);
             continue;
@@ -134,15 +142,15 @@ void setup() {
     while (!Serial && millis() < timeout) { delay(10); }
     delay(1000);
 
-    Serial.println("\n--- ESP32-S3 CAM VIDEO RECORDER ---");
+    Serial.println("\n--- ESP32-S3 OV5640 VIDEO RECORDER ---");
 
-    // Initialize Camera first
+    // 1. Initialize OV5640 Camera First
     if (!startCamera()) {
         Serial.println("[FATAL] Camera init failed. Stopping setup.");
         return;
     }
 
-    // Initialize Onboard SD Card Reader (1-bit SD_MMC mode)
+    // 2. Initialize SD Card slot (1-bit SD_MMC mode)
     if (!SD_MMC.begin("/sdcard", true)) {
         Serial.println("[ERROR] SD Card Mount Failed!");
         return;
@@ -150,7 +158,7 @@ void setup() {
 
     Serial.println("[INFO] SD Card Mounted Successfully.");
 
-    // Start Recording
+    // 3. Begin recording
     recordVideo();
 }
 
