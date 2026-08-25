@@ -3,7 +3,7 @@
 #include "SD_MMC.h"
 
 // ==========================================
-// 1. CAMERA PIN CONFIGURATION (Freenove ESP32-S3 CAM)
+// 1. CAMERA PIN CONFIGURATION
 // ==========================================
 #define PWDN_GPIO_NUM     -1
 #define RESET_GPIO_NUM    -1
@@ -23,13 +23,10 @@
 #define HREF_GPIO_NUM     26
 #define PCLK_GPIO_NUM     12
 
-#define LED_INDICATOR_PIN  2 // Built-in LED pin for safe-to-disconnect status
+#define LED_INDICATOR_PIN  2 
 
-// ==========================================
-// 2. VIDEO RECORDING PARAMETERS
-// ==========================================
-const int RECORD_TIME_SECONDS = 10; // Video recording duration
-const int TARGET_FPS = 15;          // Target Frames Per Second
+const int RECORD_TIME_SECONDS = 10;
+const int TARGET_FPS = 15;
 
 void startCamera() {
     camera_config_t config;
@@ -52,25 +49,38 @@ void startCamera() {
     config.pin_pwdn = PWDN_GPIO_NUM;
     config.pin_reset = RESET_GPIO_NUM;
     
-    // Lower XCLK slightly to ensure stable frame transfers over PSRAM
     config.xclk_freq_hz = 16000000;
     config.pixel_format = PIXFORMAT_JPEG;
-    
-    config.frame_size = FRAMESIZE_VGA; // 640x480 resolution
-    config.jpeg_quality = 12;          // 0-63 scale
-    config.fb_count = 2;               // Double buffering via PSRAM
-    config.fb_location = CAMERA_FB_IN_PSRAM; // Explicitly assign frame buffers to PSRAM
     config.grab_mode = CAMERA_GRAB_LATEST;
+
+    // Smart PSRAM / DRAM Fallback Check
+    if (psramFound()) {
+        Serial.printf("[INFO] PSRAM Active (%d KB Free). Allocating PSRAM buffers...\n", ESP.getFreePsram() / 1024);
+        config.frame_size = FRAMESIZE_VGA;  // 640x480
+        config.jpeg_quality = 12;
+        config.fb_count = 2;
+        config.fb_location = CAMERA_FB_IN_PSRAM;
+    } else {
+        Serial.println("[WARNING] PSRAM NOT active! Falling back to internal DRAM...");
+        config.frame_size = FRAMESIZE_QVGA; // Lower to 320x240 to fit in DRAM
+        config.jpeg_quality = 15;
+        config.fb_count = 1;
+        config.fb_location = CAMERA_FB_IN_DRAM;
+    }
 
     esp_err_t err = esp_camera_init(&config);
     if (err != ESP_OK) {
-        Serial.printf("[ERROR] Camera init failed with code 0x%x\n", err);
-        while (1) { delay(100); }
+        Serial.printf("[ERROR] Camera init failed with code 0x%x. Halting.\n", err);
+        while (1) { 
+            digitalWrite(LED_INDICATOR_PIN, !digitalRead(LED_INDICATOR_PIN));
+            delay(100); 
+        }
     }
+    Serial.println("[INFO] Camera initialized successfully!");
 }
 
 void recordVideo() {
-    digitalWrite(LED_INDICATOR_PIN, HIGH); // Turn LED ON during active recording
+    digitalWrite(LED_INDICATOR_PIN, HIGH);
     String filename = "/video_" + String(millis()) + ".mjpeg";
     File file = SD_MMC.open(filename, FILE_WRITE);
 
@@ -92,20 +102,17 @@ void recordVideo() {
 
         camera_fb_t * fb = esp_camera_fb_get();
         
-        // Safety check to prevent LoadProhibited Crash
         if (!fb || !fb->buf || fb->len == 0) {
-            Serial.println("[WARNING] Camera capture returned NULL pointer! Skipping frame...");
+            Serial.println("[WARNING] Camera frame empty! Skipping...");
             if (fb) esp_camera_fb_return(fb);
             delay(10);
             continue;
         }
 
-        // Write JPEG payload directly to SD file
         file.write(fb->buf, fb->len);
         esp_camera_fb_return(fb);
         frameCount++;
 
-        // Precise frame rate pacing
         unsigned long elapsed = millis() - frameStart;
         if (elapsed < frameIntervalMs) {
             delay(frameIntervalMs - elapsed);
@@ -113,18 +120,17 @@ void recordVideo() {
     }
 
     file.flush();
-    file.close(); // Safely closes file stream before power loss
+    file.close();
     
-    digitalWrite(LED_INDICATOR_PIN, LOW); // Turn LED OFF when safe to unplug USB
+    digitalWrite(LED_INDICATOR_PIN, LOW);
     Serial.printf("[SUCCESS] Saved %d frames to %s\n", frameCount, filename.c_str());
-    Serial.println("[SAFE] Recording complete. You can safely unplug USB now.");
+    Serial.println("[SAFE] Recording complete. Safe to unplug USB.");
 }
 
 void setup() {
     pinMode(LED_INDICATOR_PIN, OUTPUT);
     digitalWrite(LED_INDICATOR_PIN, LOW);
 
-    // Native USB CDC Serial Startup
     Serial.begin(115200);
     unsigned long timeout = millis() + 3000;
     while (!Serial && millis() < timeout) { delay(10); }
@@ -132,25 +138,20 @@ void setup() {
 
     Serial.println("\n--- ESP32-S3 CAM VIDEO RECORDER ---");
 
-    // Check PSRAM Hardware Initialization
-    if (!psramFound()) {
-        Serial.println("[ERROR] PSRAM hardware not detected! Check IDE settings.");
-        return;
-    }
-    Serial.printf("[INFO] PSRAM Found! Free Size: %d KB\n", ESP.getFreePsram() / 1024);
-
-    // Set explicit pin map & pull-ups for 1-bit SD_MMC mode
-    pinMode(38, INPUT_PULLUP); // CMD
-    pinMode(40, INPUT_PULLUP); // D0
-    pinMode(39, INPUT_PULLUP); // CLK
+    // Configure SD Pins
+    pinMode(38, INPUT_PULLUP);
+    pinMode(40, INPUT_PULLUP);
+    pinMode(39, INPUT_PULLUP);
     SD_MMC.setPins(39, 38, 40);
 
-    if (!SD_MMC.begin("/sdcard", true)) { // 1-bit mode initialization
+    if (!SD_MMC.begin("/sdcard", true)) {
         Serial.println("[ERROR] SD Card Mount Failed!");
         return;
     }
 
     Serial.println("[INFO] SD Card Mounted Successfully.");
+
+    // Start Camera after SD initialization
     startCamera();
     recordVideo();
 }
