@@ -63,7 +63,7 @@ void loop() {
 
         // 2. Parse Packet ID from incoming payload ($CANSAT,ID,...)
         uint32_t packet_id = 0;
-        if (incomingPacket.startswith("$CANSAT,")) {
+        if (incomingPacket.startsWith("$CANSAT,")) {
             int firstComma = incomingPacket.indexOf(',');
             int secondComma = incomingPacket.indexOf(',', firstComma + 1);
             if (firstComma != -1 && secondComma != -1) {
