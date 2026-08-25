@@ -3,25 +3,25 @@
 #include "SD_MMC.h"
 
 // ==========================================
-// 1. CAMERA PIN MAP
+// INTEGRATED ESP32-S3 CAM + SD PINOUT
 // ==========================================
 #define PWDN_GPIO_NUM     -1
 #define RESET_GPIO_NUM    -1
 #define XCLK_GPIO_NUM     10
-#define SIOD_GPIO_NUM     40
-#define SIOC_GPIO_NUM     39
+#define SIOD_GPIO_NUM     17  // SCCB Data line
+#define SIOC_GPIO_NUM     18  // SCCB Clock line
 
-#define Y9_GPIO_NUM       38
-#define Y8_GPIO_NUM       37
-#define Y7_GPIO_NUM       36
-#define Y6_GPIO_NUM       35
-#define Y5_GPIO_NUM       34
-#define Y4_GPIO_NUM       33
-#define Y3_GPIO_NUM       21
-#define Y2_GPIO_NUM       11
-#define VSYNC_GPIO_NUM    22
-#define HREF_GPIO_NUM     26
-#define PCLK_GPIO_NUM     12
+#define Y9_GPIO_NUM       11
+#define Y8_GPIO_NUM       9
+#define Y7_GPIO_NUM       8
+#define Y6_GPIO_NUM       6
+#define Y5_GPIO_NUM       4
+#define Y4_GPIO_NUM       2
+#define Y3_GPIO_NUM       1
+#define Y2_GPIO_NUM       5
+#define VSYNC_GPIO_NUM    13
+#define HREF_GPIO_NUM     12
+#define PCLK_GPIO_NUM     7
 
 #define LED_INDICATOR_PIN  2 
 
@@ -49,7 +49,7 @@ bool startCamera() {
     config.pin_pwdn = PWDN_GPIO_NUM;
     config.pin_reset = RESET_GPIO_NUM;
     
-    config.xclk_freq_hz = 10000000;
+    config.xclk_freq_hz = 16000000;
     config.pixel_format = PIXFORMAT_JPEG;
     config.grab_mode = CAMERA_GRAB_LATEST;
 
@@ -69,7 +69,7 @@ bool startCamera() {
 
     esp_err_t err = esp_camera_init(&config);
     if (err != ESP_OK) {
-        Serial.printf("[ERROR] Camera init failed: 0x%x\n", err);
+        Serial.printf("[ERROR] Camera init failed with code: 0x%x\n", err);
         return false;
     }
 
@@ -136,21 +136,13 @@ void setup() {
 
     Serial.println("\n--- ESP32-S3 CAM VIDEO RECORDER ---");
 
-    // STEP 1: Initialize Camera FIRST before SD_MMC claims GPIO pins
+    // Initialize Camera first
     if (!startCamera()) {
-        Serial.println("[FATAL] Camera initialization failed. Halting.");
-        while (1) {
-            digitalWrite(LED_INDICATOR_PIN, !digitalRead(LED_INDICATOR_PIN));
-            delay(100);
-        }
+        Serial.println("[FATAL] Camera init failed. Stopping setup.");
+        return;
     }
 
-    // STEP 2: Configure and initialize SD Card SECOND
-    pinMode(38, INPUT_PULLUP);
-    pinMode(40, INPUT_PULLUP);
-    pinMode(39, INPUT_PULLUP);
-    SD_MMC.setPins(39, 38, 40);
-
+    // Initialize Onboard SD Card Reader (1-bit SD_MMC mode)
     if (!SD_MMC.begin("/sdcard", true)) {
         Serial.println("[ERROR] SD Card Mount Failed!");
         return;
@@ -158,7 +150,7 @@ void setup() {
 
     Serial.println("[INFO] SD Card Mounted Successfully.");
 
-    // STEP 3: Start recording loop
+    // Start Recording
     recordVideo();
 }
 
