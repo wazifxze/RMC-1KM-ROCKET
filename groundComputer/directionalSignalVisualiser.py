@@ -8,7 +8,7 @@ import serial.tools.list_ports
 # ==========================================
 #  CONFIGURATIONS
 # ==========================================
-SERIAL_PORT = "COM3"  # Change to your port (e.g., '/dev/ttyACM0' on Linux)
+SERIAL_PORT = "COM7"  # Change to your port (e.g., '/dev/ttyACM0' on Linux)
 BAUD_RATE = 115200
 MAX_POINTS = 200  # Number of historical points shown on graph
 
