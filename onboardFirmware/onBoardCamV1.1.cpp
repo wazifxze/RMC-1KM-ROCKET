@@ -51,16 +51,20 @@ void startCamera() {
     config.pin_sccb_scl = SIOC_GPIO_NUM;
     config.pin_pwdn = PWDN_GPIO_NUM;
     config.pin_reset = RESET_GPIO_NUM;
-    config.xclk_freq_hz = 20000000;
+    
+    // Lower XCLK slightly to ensure stable frame transfers over PSRAM
+    config.xclk_freq_hz = 16000000;
     config.pixel_format = PIXFORMAT_JPEG;
     
     config.frame_size = FRAMESIZE_VGA; // 640x480 resolution
     config.jpeg_quality = 12;          // 0-63 scale
     config.fb_count = 2;               // Double buffering via PSRAM
+    config.fb_location = CAMERA_FB_IN_PSRAM; // Explicitly assign frame buffers to PSRAM
+    config.grab_mode = CAMERA_GRAB_LATEST;
 
     esp_err_t err = esp_camera_init(&config);
     if (err != ESP_OK) {
-        Serial.printf("[ERROR] Camera init failed: 0x%x\n", err);
+        Serial.printf("[ERROR] Camera init failed with code 0x%x\n", err);
         while (1) { delay(100); }
     }
 }
@@ -87,8 +91,12 @@ void recordVideo() {
         unsigned long frameStart = millis();
 
         camera_fb_t * fb = esp_camera_fb_get();
-        if (!fb) {
-            Serial.println("[WARNING] Frame capture failed!");
+        
+        // Safety check to prevent LoadProhibited Crash
+        if (!fb || !fb->buf || fb->len == 0) {
+            Serial.println("[WARNING] Camera capture returned NULL pointer! Skipping frame...");
+            if (fb) esp_camera_fb_return(fb);
+            delay(10);
             continue;
         }
 
@@ -116,7 +124,7 @@ void setup() {
     pinMode(LED_INDICATOR_PIN, OUTPUT);
     digitalWrite(LED_INDICATOR_PIN, LOW);
 
-    // 1. Fix Native USB CDC Serial Startup
+    // Native USB CDC Serial Startup
     Serial.begin(115200);
     unsigned long timeout = millis() + 3000;
     while (!Serial && millis() < timeout) { delay(10); }
@@ -124,7 +132,14 @@ void setup() {
 
     Serial.println("\n--- ESP32-S3 CAM VIDEO RECORDER ---");
 
-    // 2. Fix SD Card Mount Failures (Set explicit pin map & pull-ups for 1-bit SD_MMC mode)
+    // Check PSRAM Hardware Initialization
+    if (!psramFound()) {
+        Serial.println("[ERROR] PSRAM hardware not detected! Check IDE settings.");
+        return;
+    }
+    Serial.printf("[INFO] PSRAM Found! Free Size: %d KB\n", ESP.getFreePsram() / 1024);
+
+    // Set explicit pin map & pull-ups for 1-bit SD_MMC mode
     pinMode(38, INPUT_PULLUP); // CMD
     pinMode(40, INPUT_PULLUP); // D0
     pinMode(39, INPUT_PULLUP); // CLK
@@ -132,7 +147,6 @@ void setup() {
 
     if (!SD_MMC.begin("/sdcard", true)) { // 1-bit mode initialization
         Serial.println("[ERROR] SD Card Mount Failed!");
-        Serial.println("[CHECK] Ensure card is FAT32 formatted with MBR partition scheme.");
         return;
     }
 
