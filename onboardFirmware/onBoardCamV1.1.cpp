@@ -3,13 +3,13 @@
 #include "SD_MMC.h"
 
 // ==========================================
-// OV5640 ESP32-S3 INTEGRATED BOARD PINOUT
+// 1. PIN CONFIGURATION & HARDWARE
 // ==========================================
 #define PWDN_GPIO_NUM     -1
 #define RESET_GPIO_NUM    -1
 #define XCLK_GPIO_NUM     15
-#define SIOD_GPIO_NUM      4  // SCCB Data
-#define SIOC_GPIO_NUM      5  // SCCB Clock
+#define SIOD_GPIO_NUM      4  
+#define SIOC_GPIO_NUM      5  
 
 #define Y9_GPIO_NUM       16
 #define Y8_GPIO_NUM       17
@@ -24,9 +24,12 @@
 #define PCLK_GPIO_NUM     13
 
 #define LED_INDICATOR_PIN  2 
+#define BUTTON_PIN         0  // Onboard BOOT Button (GPIO 0)
 
-const int RECORD_TIME_SECONDS = 10;
 const int TARGET_FPS = 15;
+const unsigned long FRAME_INTERVAL_MS = 1000 / TARGET_FPS;
+
+bool isRecording = false;
 
 bool startCamera() {
     camera_config_t config;
@@ -54,13 +57,11 @@ bool startCamera() {
     config.grab_mode = CAMERA_GRAB_LATEST;
 
     if (psramFound()) {
-        Serial.printf("[INFO] PSRAM Active (%d KB Free). Allocating buffers...\n", ESP.getFreePsram() / 1024);
         config.frame_size = FRAMESIZE_VGA;  
         config.jpeg_quality = 12;          
         config.fb_count = 2;
         config.fb_location = CAMERA_FB_IN_PSRAM;
     } else {
-        Serial.println("[WARNING] PSRAM NOT active! Falling back to DRAM...");
         config.frame_size = FRAMESIZE_QVGA; 
         config.jpeg_quality = 15;
         config.fb_count = 1;
@@ -68,23 +69,11 @@ bool startCamera() {
     }
 
     esp_err_t err = esp_camera_init(&config);
-    if (err != ESP_OK) {
-        Serial.printf("[ERROR] Camera init failed with code: 0x%x\n", err);
-        return false;
-    }
-
-    sensor_t * s = esp_camera_sensor_get();
-    if (s != NULL) {
-        s->set_vflip(s, 0);
-        s->set_hmirror(s, 0);
-    }
-
-    Serial.println("[INFO] OV5640 Camera initialized successfully!");
-    return true;
+    return (err == ESP_OK);
 }
 
-void recordVideo() {
-    digitalWrite(LED_INDICATOR_PIN, HIGH);
+void recordContinuousVideo() {
+    digitalWrite(LED_INDICATOR_PIN, HIGH); // LED ON = Active Recording
     String filename = "/video_" + String(millis()) + ".mjpeg";
     File file = SD_MMC.open(filename, FILE_WRITE);
 
@@ -94,22 +83,31 @@ void recordVideo() {
         return;
     }
 
-    Serial.printf("[INFO] Recording started: %s\n", filename.c_str());
+    Serial.printf("[INFO] Continuous Recording Started: %s\n", filename.c_str());
+    Serial.println("[INFO] Press BOOT button (GPIO 0) anytime to STOP recording.");
 
-    unsigned long startTime = millis();
-    unsigned long endTime = startTime + (RECORD_TIME_SECONDS * 1000);
     int frameCount = 0;
-    const unsigned long frameIntervalMs = 1000 / TARGET_FPS;
+    isRecording = true;
 
-    while (millis() < endTime) {
+    // Wait until button is released if pressed to start
+    while (digitalRead(BUTTON_PIN) == LOW) { delay(10); }
+
+    while (isRecording) {
         unsigned long frameStart = millis();
 
+        // Check if BOOT button is pressed to STOP
+        if (digitalRead(BUTTON_PIN) == LOW) {
+            delay(50); // Debounce
+            if (digitalRead(BUTTON_PIN) == LOW) {
+                Serial.println("\n[ACTION] Stop button detected!");
+                isRecording = false;
+                break;
+            }
+        }
+
         camera_fb_t * fb = esp_camera_fb_get();
-        
         if (!fb || !fb->buf || fb->len == 0) {
-            Serial.println("[WARNING] Empty frame! Skipping...");
             if (fb) esp_camera_fb_return(fb);
-            delay(10);
             continue;
         }
 
@@ -118,55 +116,55 @@ void recordVideo() {
         frameCount++;
 
         unsigned long elapsed = millis() - frameStart;
-        if (elapsed < frameIntervalMs) {
-            delay(frameIntervalMs - elapsed);
+        if (elapsed < FRAME_INTERVAL_MS) {
+            delay(FRAME_INTERVAL_MS - elapsed);
         }
     }
 
     file.flush();
-    file.close();
+    file.close(); // Crucial: Finalize AVI/MJPEG container on SD card
     
-    digitalWrite(LED_INDICATOR_PIN, LOW);
-    Serial.printf("[SUCCESS] Saved %d frames to %s\n", frameCount, filename.c_str());
-    Serial.println("[SAFE] Recording complete. Safe to unplug USB.");
+    digitalWrite(LED_INDICATOR_PIN, LOW); // LED OFF = Safe to disconnect
+    Serial.printf("[SUCCESS] Recording stopped! Saved %d frames to %s\n", frameCount, filename.c_str());
+    Serial.println("[SAFE] File closed. Safe to power off or unplug SD card.");
 }
 
 void setup() {
     pinMode(LED_INDICATOR_PIN, OUTPUT);
     digitalWrite(LED_INDICATOR_PIN, LOW);
 
+    // Set up onboard BOOT button with internal pull-up resistor
+    pinMode(BUTTON_PIN, INPUT_PULLUP);
+
     Serial.begin(115200);
     unsigned long timeout = millis() + 3000;
     while (!Serial && millis() < timeout) { delay(10); }
     delay(1000);
 
-    Serial.println("\n--- ESP32-S3 OV5640 VIDEO RECORDER ---");
+    Serial.println("\n--- CONTINUOUS VIDEO RECORDER ---");
 
-    // 1. Initialize Camera First
     if (!startCamera()) {
-        Serial.println("[FATAL] Camera init failed. Stopping setup.");
+        Serial.println("[FATAL] Camera init failed!");
         return;
     }
 
-    // 2. Configure Pin Mapping & Internal Pull-ups for Integrated SD Card Slot
-    pinMode(38, INPUT_PULLUP); // CMD
-    pinMode(40, INPUT_PULLUP); // D0
-    pinMode(39, INPUT_PULLUP); // CLK
+    pinMode(38, INPUT_PULLUP);
+    pinMode(40, INPUT_PULLUP);
+    pinMode(39, INPUT_PULLUP);
     SD_MMC.setPins(39, 38, 40);
 
-    // 3. Mount SD Card in 1-bit SD_MMC mode
     if (!SD_MMC.begin("/sdcard", true)) {
         Serial.println("[ERROR] SD Card Mount Failed!");
-        Serial.println("[CHECK] Ensure card is formatted to FAT32 with MBR scheme (32GB or smaller).");
         return;
     }
 
-    Serial.println("[INFO] SD Card Mounted Successfully.");
-
-    // 4. Begin Video Recording
-    recordVideo();
+    Serial.println("[INFO] Hardware Ready. Starting recording loop...");
+    
+    // Begin continuous recording
+    recordContinuousVideo();
 }
 
 void loop() {
+    // Idle state after recording is stopped via button
     delay(1000);
 }
