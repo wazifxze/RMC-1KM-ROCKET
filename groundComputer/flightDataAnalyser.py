@@ -152,30 +152,37 @@ def analyze_rocket_telemetry(file_path):
     return True
 
 
-if __name__ == "__main__":
+
     import os
 
-    # 1. Accept filename from terminal argument, or fallback to default
-    if len(sys.argv) > 1:
-        TARGET_FILE = sys.argv[1]
-    else:
-        TARGET_FILE = "telemetry_log.csv"
+# 1. Accept filename from terminal argument, or fallback to default
+if len(sys.argv) > 1:
+    TARGET_FILE = sys.argv[1]
+else:
+    TARGET_FILE = "telemetry_log.csv"
 
-    # 2. Print current path and verify file existence before running
-    print(f"[DEBUG] Current Directory : {os.getcwd()}")
-    print(f"[DEBUG] Target File Path  : {TARGET_FILE}")
+# 2. Print current path and verify file existence before running
+print(f"[DEBUG] Current Directory : {os.getcwd()}")
+print(f"[DEBUG] Target File Path  : {TARGET_FILE}")
 
-    if not os.path.exists(TARGET_FILE):
-        print(f"\n[ERROR] File '{TARGET_FILE}' does NOT exist in this directory!")
-        print("[ACTION] Either rename your file to 'telemetry_log.csv' or run:")
-        print("         python3 flightDataAnalyser.py <your_file_name.csv>")
-    else:
-        try:
-            analyze_rocket_telemetry(TARGET_FILE)
-        except Exception as fatal_err:
-            print(f"\n[CRITICAL ERROR] {fatal_err}")
+if not os.path.exists(TARGET_FILE):
+    print(f"\n[ERROR] File '{TARGET_FILE}' does NOT exist in this directory!")
+    print("[ACTION] Either rename your file to 'telemetry_log.csv' or run:")
+    print("         python3 flightDataAnalyser.py <your_file_name.csv>")
+else:
+    try:
+        analyze_rocket_telemetry(TARGET_FILE)
+    except Exception as fatal_err:
+        print(f"\n[CRITICAL ERROR] {fatal_err}")
 
-    # 3. Always pause before exiting so terminal output stays visible
-    print("\n" + "=" * 45)
-    input("Press ENTER to exit program...")
-    sys.exit()
+# 3. Always pause before exiting so terminal output stays visible
+print("\n" + "=" * 45)
+input("Press ENTER to exit program...")
+sys.exit()
+
+# --- FORCE EXECUTION (NO WRAPPERS) ---
+print("[DEBUG] SCRIPT STARTED")
+target_file = sys.argv[1] if len(sys.argv) > 1 else "telemetry_log.csv"
+print(f"[DEBUG] Target set to: {target_file}")
+analyze_rocket_telemetry(target_file)
+input("[DEBUG] Press ENTER to exit...")
