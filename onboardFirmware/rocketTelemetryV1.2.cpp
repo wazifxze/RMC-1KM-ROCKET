@@ -7,6 +7,7 @@
 #include <Adafruit_BME280.h>
 #include <BMI160Gen.h>
 #include <TinyGPSPlus.h>
+#include <ESP32Servo.h>
 
 // ==========================================
 //  PIN DEFINITIONS (Seeed Studio XIAO ESP32-S3)
@@ -23,10 +24,13 @@
 #define LORA_RST_PIN     1  // D0
 #define LORA_DIO0_PIN    2  // D1
 
-#define GPS_RX_PIN  44   // D7
-#define GPS_TX_PIN  43   // D6
+#define GPS_RX_PIN      44  // D7
+#define GPS_TX_PIN      -1  // Disabled to free GPIO 43
+#define SERVO_PIN       43  // D6 (Reassigned for parachute trigger)
+
 HardwareSerial GPSSerial(1);
 TinyGPSPlus gps;
+Servo deployServo;
 
 // ==========================================
 //  TELEMETRY DATA STRUCTURE
@@ -36,12 +40,14 @@ struct TelemetryPacket {
     uint32_t timestamp_ms;
     float pressure;      // hPa
     float temperature;   // Deg C
+    float baro_alt;      // Relative Altitude (m)
     float ax, ay, az;    // G-forces (g)
     float gx, gy, gz;    // Angular velocity (deg/s)
     double gps_lat, gps_lon;
     float  gps_alt;
     uint8_t gps_satellites;
     bool   gps_fix_valid;
+    bool   apogee_triggered;
 };
 
 // FreeRTOS Queue for Thread-Safe Inter-Core Transfer
@@ -53,9 +59,19 @@ File logFile;
 bool sdInitialized = false;
 bool loraInitialized = false;
 
-// Global IMU Calibration Offsets
+// Global Calibration & Apogee Variables
 float ax_offset = 0.0, ay_offset = 0.0, az_offset = 0.0;
 float gx_offset = 0.0, gy_offset = 0.0, gz_offset = 0.0;
+float ground_pressure_hpa = 1013.25;
+
+float max_altitude = 0.0;
+bool apogee_triggered = false;
+const float APOGEE_ARM_ALT_M = 15.0;  // Minimum altitude above ground to arm trigger
+const float APOGEE_DROP_M    = 2.5;   // Altitude drop from peak required to declare apogee
+
+// Servo Positions (Degrees)
+const int SERVO_LOCKED_POS   = 0;
+const int SERVO_DEPLOY_POS   = 90;
 
 // ==========================================
 //  IMU CALIBRATION FUNCTION (GLOBAL SCOPE)
@@ -74,7 +90,6 @@ void calibrateIMU() {
         BMI160.readAccelerometer(rawAx, rawAy, rawAz);
         BMI160.readGyro(rawGx, rawGy, rawGz);
         
-        // Accumulate measurements in physical units (G and deg/s)
         sum_ax += (float)rawAx / 2048.0f;
         sum_ay += (float)rawAy / 2048.0f;
         sum_az += (float)rawAz / 2048.0f;
@@ -86,11 +101,8 @@ void calibrateIMU() {
         delay(5);
     }
 
-    // Calculate mean static zero-g offsets
     ax_offset = sum_ax / samples;
     ay_offset = sum_ay / samples;
-    
-    // Z-axis experiences 1.0G gravity at rest (vertical rocket mount)
     az_offset = (sum_az / samples) - 1.0f; 
 
     gx_offset = sum_gx / samples;
@@ -98,6 +110,22 @@ void calibrateIMU() {
     gz_offset = sum_gz / samples;
 
     Serial.println("[INFO] IMU Calibration Complete.");
+}
+
+// ==========================================
+//  BAROMETER GROUND CALIBRATION
+// ==========================================
+void calibrateGroundPressure() {
+    float sum_pressure = 0.0;
+    const int samples = 50;
+    
+    Serial.println("[INFO] Calibrating Ground Pressure...");
+    for (int i = 0; i < samples; i++) {
+        sum_pressure += bme.readPressure() / 100.0F;
+        delay(20);
+    }
+    ground_pressure_hpa = sum_pressure / samples;
+    Serial.printf("[INFO] Ground Pressure Baseline: %.2f hPa\n", ground_pressure_hpa);
 }
 
 // ==========================================
@@ -112,17 +140,33 @@ void TaskSensorSampling(void *pvParameters) {
         packet.timestamp_ms = millis();
 
         // 1. Read BME280 Atmospheric Data
-        packet.pressure = bme.readPressure() / 100.0F; // Convert Pa to hPa
+        packet.pressure = bme.readPressure() / 100.0F;
         packet.temperature = bme.readTemperature();
+        packet.baro_alt = bme.readAltitude(ground_pressure_hpa);
 
-        // 2. Read BMI160 IMU Data & Apply Offsets
+        // 2. Apogee Detection Trigger Logic
+        if (!apogee_triggered) {
+            if (packet.baro_alt > max_altitude) {
+                max_altitude = packet.baro_alt;
+            }
+            // Trigger if rocket passed arming altitude and dropped by threshold distance
+            if ((max_altitude > APOGEE_ARM_ALT_M) && 
+                ((max_altitude - packet.baro_alt) >= APOGEE_DROP_M)) {
+                
+                apogee_triggered = true;
+                deployServo.write(SERVO_DEPLOY_POS); // Actuate servo mechanism
+                Serial.printf("[ACTION] APOGEE DETECTED AT %.2f m! Servo Deployed.\n", max_altitude);
+            }
+        }
+        packet.apogee_triggered = apogee_triggered;
+
+        // 3. Read BMI160 IMU Data & Apply Offsets
         int rawAx, rawAy, rawAz;
         int rawGx, rawGy, rawGz;
 
         BMI160.readAccelerometer(rawAx, rawAy, rawAz);
         BMI160.readGyro(rawGx, rawGy, rawGz);
 
-        // Convert LSB to physical units and subtract static bias
         packet.ax = ((float)rawAx / 2048.0f) - ax_offset;
         packet.ay = ((float)rawAy / 2048.0f) - ay_offset;
         packet.az = ((float)rawAz / 2048.0f) - az_offset;
@@ -131,7 +175,7 @@ void TaskSensorSampling(void *pvParameters) {
         packet.gy = ((float)rawGy / 16.4f) - gy_offset;
         packet.gz = ((float)rawGz / 16.4f) - gz_offset;
 
-        // 3. Process GPS NMEA Stream
+        // 4. Process GPS NMEA Stream
         while (GPSSerial.available()) {
             gps.encode(GPSSerial.read());
         }
@@ -141,10 +185,9 @@ void TaskSensorSampling(void *pvParameters) {
         packet.gps_alt        = gps.altitude.isValid() ? gps.altitude.meters() : 0.0f;
         packet.gps_satellites = gps.satellites.value();
 
-        // 4. Push packet to inter-core queue
+        // 5. Push packet to queue
         xQueueSend(telemetryQueue, &packet, 0);
 
-        // Run sampling loop at ~50 Hz
         vTaskDelay(pdMS_TO_TICKS(20));
     }
 }
@@ -163,6 +206,7 @@ void TaskRadioAndLogging(void *pvParameters) {
             csvPacket += String(packet.timestamp_ms) + ",";
             csvPacket += String(packet.pressure, 2) + ",";
             csvPacket += String(packet.temperature, 2) + ",";
+            csvPacket += String(packet.baro_alt, 2) + ",";
             csvPacket += String(packet.ax, 2) + ",";
             csvPacket += String(packet.ay, 2) + ",";
             csvPacket += String(packet.az, 2) + ",";
@@ -173,26 +217,19 @@ void TaskRadioAndLogging(void *pvParameters) {
             csvPacket += String(packet.gps_lat, 6) + ",";
             csvPacket += String(packet.gps_lon, 6) + ",";
             csvPacket += String(packet.gps_alt, 1) + ",";
-            csvPacket += String(packet.gps_satellites);
+            csvPacket += String(packet.gps_satellites) + ",";
+            csvPacket += String(packet.apogee_triggered ? 1 : 0);
             csvPacket += "*";
 
-            // 1. Log EVERY packet to SD Card (50 Hz)
             if (sdInitialized && logFile) {
-                Serial.print("[SD] Writing ID: ");
-                Serial.print(packet.packet_id);
                 logFile.println(csvPacket);
                 if (packet.packet_id % 10 == 0) logFile.flush();
-                Serial.println(" ... Done.");
             }
 
-            // 2. Transmit over LoRa every 7th packet (~7 Hz)
             if (loraInitialized && (packet.packet_id % 7 == 0)) {
-                Serial.print("[LoRa] Transmitting ID: ");
-                Serial.print(packet.packet_id);
                 LoRa.beginPacket();
                 LoRa.print(csvPacket);
                 LoRa.endPacket(false); 
-                Serial.println(" ... Done.");
             }
 
             vTaskDelay(pdMS_TO_TICKS(1));
@@ -207,7 +244,10 @@ void setup() {
     Serial.begin(115200);
     delay(1000); 
 
-    // Explicitly deselect SPI CS pins before initialization
+    // Attach Servo & move to locked position
+    deployServo.attach(SERVO_PIN);
+    deployServo.write(SERVO_LOCKED_POS);
+
     pinMode(SD_CS_PIN, OUTPUT);
     digitalWrite(SD_CS_PIN, HIGH);
     pinMode(LORA_CS_PIN, OUTPUT);
@@ -217,41 +257,36 @@ void setup() {
 
     telemetryQueue = xQueueCreate(20, sizeof(TelemetryPacket));
 
-    // 1. Initialize Shared I2C Bus
     Wire.begin(I2C_SDA_PIN, I2C_SCL_PIN);
     Wire.setClock(100000); 
 
-    if (!bme.begin(0x76, &Wire) && !bme.begin(0x77, &Wire)) {
+    if (bme.begin(0x76, &Wire) || bme.begin(0x77, &Wire)) {
+        calibrateGroundPressure();
+    } else {
         Serial.println("[ERROR] BME280 sensor not detected!");
     }
 
     if (BMI160.begin(BMI160GenClass::I2C_MODE, Wire, 0x69)) {
         BMI160.setFullScaleAccelRange(BMI160_ACCEL_RANGE_16G);
         BMI160.setFullScaleGyroRange(BMI160_GYRO_RANGE_2000);
-        Serial.println("[INFO] BMI160 Initialized");
-        
-        // Execute pad calibration phase prior to task dispatch
         calibrateIMU();
     } else {
         Serial.println("[ERROR] BMI160 IMU Init Failed!");
     }
 
-    // 2. Initialize Shared SPI Bus
     SPI.begin(SPI_SCK_PIN, SPI_MISO_PIN, SPI_MOSI_PIN);
 
-    // 3. Initialize SD Card Module
     if (SD.begin(SD_CS_PIN, SPI)) {
         sdInitialized = true;
         logFile = SD.open("/flight_log.csv", FILE_APPEND);
         if (logFile) {
-            logFile.println("HEADER,PACKET_ID,TIME_MS,PRESS_HPA,TEMP_C,AX,AY,AZ,GX,GY,GZ,GPS_FIX,GPS_LAT,GPS_LON,GPS_ALT,GPS_SATS");
+            logFile.println("HEADER,PACKET_ID,TIME_MS,PRESS_HPA,TEMP_C,REL_ALT_M,AX,AY,AZ,GX,GY,GZ,GPS_FIX,GPS_LAT,GPS_LON,GPS_ALT,GPS_SATS,APOGEE");
             logFile.flush();
         }
     } else {
         Serial.println("[WARNING] SD Card Mount Failed!");
     }
 
-    // 4. Initialize LoRa Ra-02 Module
     LoRa.setPins(LORA_CS_PIN, LORA_RST_PIN, LORA_DIO0_PIN);
     if (LoRa.begin(433E6)) { 
         loraInitialized = true;
@@ -263,17 +298,10 @@ void setup() {
         Serial.println("[ERROR] LoRa Ra-02 Init Failed!");
     }
 
-    // Pin FreeRTOS tasks to dual ESP32-S3 cores
-    xTaskCreatePinnedToCore(
-        TaskSensorSampling, "SamplingTask", 4096, NULL, 2, NULL, 1
-    );
-
-    xTaskCreatePinnedToCore(
-        TaskRadioAndLogging, "DownlinkTask", 8192, NULL, 1, NULL, 0
-    );
+    xTaskCreatePinnedToCore(TaskSensorSampling, "SamplingTask", 4096, NULL, 2, NULL, 1);
+    xTaskCreatePinnedToCore(TaskRadioAndLogging, "DownlinkTask", 8192, NULL, 1, NULL, 0);
 }
 
 void loop() {
-    // FreeRTOS tasks handle operational loops
     vTaskDelete(NULL);
 }
