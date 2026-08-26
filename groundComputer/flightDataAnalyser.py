@@ -159,7 +159,7 @@ if __name__ == "__main__":
     if len(sys.argv) > 1:
         TARGET_FILE = sys.argv[1]
     else:
-        TARGET_FILE = "telemetry_log.csv"
+        TARGET_FILE = "flight_log.csv"
 
     # 2. Print current path and verify file existence before running
     print(f"[DEBUG] Current Directory : {os.getcwd()}")
