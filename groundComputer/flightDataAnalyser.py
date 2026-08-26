@@ -153,13 +153,13 @@ def analyze_rocket_telemetry(file_path):
 
 
 
-    import os
+import os
 
-    # 1. Accept filename from terminal argument, or fallback to default
-    if len(sys.argv) > 1:
-        TARGET_FILE = sys.argv[1]
-    else:
-        TARGET_FILE = "telemetry_log.csv"
+# 1. Accept filename from terminal argument, or fallback to default
+if len(sys.argv) > 1:
+    TARGET_FILE = sys.argv[1]
+else:
+    TARGET_FILE = "telemetry_log.csv"
 
 # 2. Print current path and verify file existence before running
 print(f"[DEBUG] Current Directory : {os.getcwd()}")
