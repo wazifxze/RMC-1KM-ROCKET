@@ -79,6 +79,9 @@ def analyze_rocket_telemetry(file_path):
     P0 = df['PRESS_HPA'].iloc[0] if df['PRESS_HPA'].iloc[0] > 0 else 1013.25
     df['BARO_ALT_M'] = 44330.0 * (1.0 - (df['PRESS_HPA'] / P0) ** 0.1903)
     df['BARO_ALT_REL'] = df['BARO_ALT_M'] - df['BARO_ALT_M'].iloc[0]
+
+    #-sample moving average window to suppress high-frequency sensor noise
+    df['BARO_ALT_SMOOTH'] = df['BARO_ALT_REL'].rolling(window=15, min_periods=1, center=True).mean()
     
     # Vertical Velocity & Vertical Acceleration
     df['VERT_VELOCITY_MS'] = np.gradient(df['BARO_ALT_REL'], df['TIME_SEC'])
@@ -165,7 +168,7 @@ def analyze_rocket_telemetry(file_path):
     fig.suptitle('Extended Flight Telemetry Analysis', fontsize=16, fontweight='bold')
 
     # Subplot 1: Altitude & Velocity
-    axs[0, 0].plot(df['TIME_SEC'], df['BARO_ALT_REL'], color='tab:blue', label='Altitude (m)')
+    axs[0, 0].plot(df['TIME_SEC'], df['BARO_ALT_SMOOTH'], color='tab:blue', label='Altitude (m)')
     axs[0, 0].scatter([apogee_time], [apogee_alt], color='red', zorder=5, label=f'Apogee ({apogee_alt:.1f}m)')
     axs[0, 0].set_title('Altitude Profile')
     axs[0, 0].set_ylabel('Altitude (m)')
