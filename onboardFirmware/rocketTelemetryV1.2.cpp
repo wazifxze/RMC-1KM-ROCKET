@@ -157,6 +157,53 @@ void TaskRadioAndLogging(void *pvParameters) {
 //  INITIALIZATION & HARDWARE SETUP
 // ==========================================
 void setup() {
+
+    // Global offset variables
+    //make sure the rocket is still and stationary when booting the board!!
+    float ax_offset = 0.0, ay_offset = 0.0, az_offset = 0.0;
+    float gx_offset = 0.0, gy_offset = 0.0, gz_offset = 0.0;
+
+    void calibrateIMU() {
+         const int samples = 500;
+        float sum_ax = 0, sum_ay = 0, sum_az = 0;
+        float sum_gx = 0, sum_gy = 0, sum_gz = 0;
+
+        Serial.println("Calibrating IMU... Keep rocket stationary!");
+
+        for (int i = 0; i < samples; i++) {
+            // Read raw sensor values (replace with your IMU read function)
+            readSensors(); 
+    
+            sum_ax += raw_ax;
+            sum_ay += raw_ay;
+            sum_az += raw_az;
+            sum_gx += raw_gx;
+            sum_gy += raw_gy;
+            sum_gz += raw_gz;
+    
+            delay(5);
+        }
+
+        // Calculate average static offsets
+        ax_offset = sum_ax / samples;
+        ay_offset = sum_ay / samples;
+  
+        // Z-axis experiences 1.0G of gravity at rest (assuming vertical mounting)
+        // If mounted horizontally, subtract 1.0G from whichever axis points straight UP.
+        az_offset = (sum_az / samples) - 1.0; 
+
+        gx_offset = sum_gx / samples;
+        gy_offset = sum_gy / samples;
+        gz_offset = sum_gz / samples;
+
+        Serial.println("IMU Calibration Complete.");
+    }
+
+    // In your loop, subtract the offsets before transmitting telemetry:
+    // ax_calibrated = raw_ax - ax_offset;
+    // az_calibrated = raw_az - az_offset;
+    // gx_calibrated = raw_gx - gx_offset;
+
     Serial.begin(115200);
     delay(1000); 
 
