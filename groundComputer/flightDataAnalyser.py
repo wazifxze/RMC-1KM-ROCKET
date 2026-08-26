@@ -40,18 +40,28 @@ def analyze_rocket_telemetry(file_path):
     # 2. Build DataFrame and Coerce Numeric Types
     try:
         df = pd.DataFrame(cleaned_rows, columns=headers)
+        
         num_cols = [
             "PACKET_ID", "TIME_MS", "PRESS_HPA", "TEMP_C", 
             "AX", "AY", "AZ", "GX", "GY", "GZ", 
             "GPS_FIX", "GPS_LAT", "GPS_LON", "GPS_ALT", "GPS_SATS"
         ]
+        
+        # Convert non-numeric header strings (like "PACKET_ID") into NaN
         for col in num_cols:
             df[col] = pd.to_numeric(df[col], errors='coerce')
             
-        df.dropna(subset=["TIME_MS"], inplace=True)
+        # ANOMALY FIX 1: Drop rows where critical fields failed to parse (header rows, trash text)
+        df.dropna(subset=["TIME_MS", "PACKET_ID", "PRESS_HPA"], inplace=True)
+        
+        # ANOMALY FIX 2: Sort by TIME_MS in case packets were logged out of order due to reboots
+        df.sort_values(by="TIME_MS", inplace=True)
+        df.reset_index(drop=True, inplace=True)
+
         if df.empty:
             print("\n[ERROR] No valid numerical rows found after parsing!")
             return False
+
     except Exception as e:
         print(f"\n[ERROR] Data parsing/formatting failed: {e}")
         return False
