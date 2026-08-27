@@ -260,17 +260,19 @@ void setup() {
     Serial.begin(115200);
     delay(1000); 
 
-    // Attach Servo & move to locked position
-    deployServo.attach(SERVO_PIN);
-    deployServo.write(SERVO_LOCKED_POS);
-
+    // 1. FORCE BOTH CHIP SELECT PINS HIGH IMMEDIATELY
+    // Prevents both modules from talking on MISO at the same time during boot
     pinMode(SD_CS_PIN, OUTPUT);
     digitalWrite(SD_CS_PIN, HIGH);
+    
     pinMode(LORA_CS_PIN, OUTPUT);
     digitalWrite(LORA_CS_PIN, HIGH);
 
-    GPSSerial.begin(9600, SERIAL_8N1, GPS_RX_PIN, GPS_TX_PIN);
+    // 2. ATTACH SERVO & INITIALIZE I2C SENSORS
+    deployServo.attach(SERVO_PIN);
+    deployServo.write(SERVO_LOCKED_POS);
 
+    GPSSerial.begin(9600, SERIAL_8N1, GPS_RX_PIN, GPS_TX_PIN);
     telemetryQueue = xQueueCreate(20, sizeof(TelemetryPacket));
 
     Wire.begin(I2C_SDA_PIN, I2C_SCL_PIN);
@@ -290,30 +292,49 @@ void setup() {
         Serial.println("[ERROR] BMI160 IMU Init Failed!");
     }
 
+    // 3. HARDWARE RESET LORA MODULE (Pulse LOW -> HIGH)
+    pinMode(LORA_RST_PIN, OUTPUT);
+    digitalWrite(LORA_RST_PIN, LOW);
+    delay(20);
+    digitalWrite(LORA_RST_PIN, HIGH);
+    delay(50);
+
+    // 4. INITIALIZE SPI BUS AT LOWER CLOCK FREQUENCY (1 MHz)
     SPI.begin(SPI_SCK_PIN, SPI_MISO_PIN, SPI_MOSI_PIN);
-
-    if (SD.begin(SD_CS_PIN, SPI)) {
-        sdInitialized = true;
-        logFile = SD.open("/flight_log.csv", FILE_APPEND);
-        if (logFile) {
-            logFile.println("HEADER,PACKET_ID,TIME_MS,PRESS_HPA,TEMP_C,REL_ALT_M,AX,AY,AZ,GX,GY,GZ,GPS_FIX,GPS_LAT,GPS_LON,GPS_ALT,GPS_SATS,APOGEE");
-            logFile.flush();
-        }
-    } else {
-        Serial.println("[WARNING] SD Card Mount Failed!");
-    }
-
+    
+    // 5. INITIALIZE LORA FIRST (Before SD Card claims SPI bus)
     LoRa.setPins(LORA_CS_PIN, LORA_RST_PIN, LORA_DIO0_PIN);
+    LoRa.setSPI(SPI);
+    LoRa.setSPIFrequency(1000000); // Lower SPI speed to pass high-impedance traces
+
     if (LoRa.begin(433E6)) { 
         loraInitialized = true;
         LoRa.setTxPower(20);          
         LoRa.setSpreadingFactor(7);   
         LoRa.setSignalBandwidth(125E3);
         LoRa.enableCrc();
+        Serial.println("[SUCCESS] LoRa Ra-02 Initialized!");
     } else {
         Serial.println("[ERROR] LoRa Ra-02 Init Failed!");
     }
 
+    // 6. INITIALIZE SD CARD SECOND (Slow speed down to 4 MHz)
+    digitalWrite(LORA_CS_PIN, HIGH); // Ensure LoRa is deselected
+    delay(10);
+
+    if (SD.begin(SD_CS_PIN, SPI, 4000000)) { 
+        sdInitialized = true;
+        logFile = SD.open("/flight_log.csv", FILE_APPEND);
+        if (logFile) {
+            logFile.println("HEADER,PACKET_ID,TIME_MS,PRESS_HPA,TEMP_C,REL_ALT_M,AX,AY,AZ,GX,GY,GZ,GPS_FIX,GPS_LAT,GPS_LON,GPS_ALT,GPS_SATS,APOGEE");
+            logFile.flush();
+        }
+        Serial.println("[SUCCESS] SD Card Mounted!");
+    } else {
+        Serial.println("[WARNING] SD Card Mount Failed!");
+    }
+
+    // 7. START FREERTOS TASKS
     xTaskCreatePinnedToCore(TaskSensorSampling, "SamplingTask", 4096, NULL, 2, NULL, 1);
     xTaskCreatePinnedToCore(TaskRadioAndLogging, "DownlinkTask", 8192, NULL, 1, NULL, 0);
 }

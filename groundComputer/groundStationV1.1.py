@@ -48,7 +48,7 @@ telemetry_label = label(
 # ==========================================
 # 2. SERIAL PORT CONFIGURATION
 # ==========================================
-SERIAL_PORT = 'COM3'
+SERIAL_PORT = 'COM7'
 BAUD_RATE = 115200
 
 try:
