@@ -201,6 +201,22 @@ void TaskRadioAndLogging(void *pvParameters) {
     for (;;) {
         if (xQueueReceive(telemetryQueue, &packet, portMAX_DELAY) == pdTRUE) {
 
+            // Check for incoming manual override commands from ground station
+            int packetSize = LoRa.parsePacket();
+            if (packetSize) {
+                String incomingCommand = "";
+                while (LoRa.available()) {
+                    incomingCommand += (char)LoRa.read();
+                }
+    
+                // Verify command payload signature
+                if (incomingCommand.indexOf("CMD_DEPLOY") != -1 && !apogee_triggered) {
+                    apogee_triggered = true;
+                    deployServo.write(SERVO_DEPLOY_POS);
+                    Serial.println("[MANUAL OVERRIDE] Manual parachute trigger received from Ground Station!");
+                }
+            }
+
             String csvPacket  = "$CANSAT,";
             csvPacket += String(packet.packet_id) + ",";
             csvPacket += String(packet.timestamp_ms) + ",";
