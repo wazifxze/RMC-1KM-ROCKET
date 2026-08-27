@@ -40,23 +40,26 @@ void setup() {
 }
 
 void loop() {
+    // 1. Read telemetry from rocket as normal
     int packetSize = LoRa.parsePacket();
-
     if (packetSize) {
-        String incomingPacket = "";
+        // Read and forward packet to Python over Serial...
+    }
 
-        while (LoRa.available()) {
-            incomingPacket += (char)LoRa.read();
+    // 2. Check for trigger command from Python script via USB Serial
+    if (Serial.available()) {
+        String serialInput = Serial.readStringUntil('\n');
+        serialInput.trim();
+        
+        if (serialInput == "TRIGGER_SERVO") {
+            // Transmit manual deploy command over LoRa 3 times for redundancy
+            for (int i = 0; i < 3; i++) {
+                LoRa.beginPacket();
+                LoRa.print("$CMD,CMD_DEPLOY*");
+                LoRa.endPacket(false);
+                delay(50);
+            }
+            Serial.println("[GROUND] Manual Deploy Command Transmitted!");
         }
-
-        int rssi = LoRa.packetRssi();
-        float snr = LoRa.packetSnr();
-
-        if (incomingPacket.endsWith("*")) {
-            incomingPacket.remove(incomingPacket.length() - 1);
-            incomingPacket += "," + String(rssi) + "," + String(snr, 1) + "*";
-        }
-
-        Serial.println(incomingPacket);
     }
 }
