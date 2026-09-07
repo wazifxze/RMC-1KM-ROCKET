@@ -260,6 +260,13 @@ void setup() {
     Serial.begin(115200);
     delay(1000); 
 
+    // 1. Deselect both SPI peripherals immediately to clear the bus
+    pinMode(2, OUTPUT); digitalWrite(2, HIGH); // SD CS (D2)
+    pinMode(3, OUTPUT); digitalWrite(3, HIGH); // LoRa CS (D3)
+
+    // 2. Explicitly define XIAO ESP32-S3 SPI pins (SCK=7, MISO=8, MOSI=9)
+    SPI.begin(7, 8, 9);
+
     // 1. FORCE BOTH CHIP SELECT PINS HIGH IMMEDIATELY
     // Prevents both modules from talking on MISO at the same time during boot
     pinMode(SD_CS_PIN, OUTPUT);
