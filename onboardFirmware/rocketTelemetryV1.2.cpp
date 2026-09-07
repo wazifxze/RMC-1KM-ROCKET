@@ -24,9 +24,9 @@
 #define LORA_RST_PIN     1  // D0 (GPIO 1)
 #define LORA_DIO0_PIN    2  // D1 (GPIO 2)
 
-#define GPS_RX_PIN      44  // D6 (GPIO 43) - Corrected for GPS RX
-#define GPS_TX_PIN      -1  // Disabled to free GPIO
-#define SERVO_PIN       43  // D7 (GPIO 44) - Corrected for Parachute Servo
+#define GPS_RX_PIN      44  // D7 (GPIO 44) - Swapped for physical wiring
+#define GPS_TX_PIN      -1  // Disabled
+#define SERVO_PIN       43  // D6 (GPIO 43) - Swapped for physical wiring
 #define ONBOARD_LED     21  // Built-in Yellow LED (Active-LOW)
 
 HardwareSerial GPSSerial(1);
@@ -311,8 +311,8 @@ void setup() {
     digitalWrite(LORA_RST_PIN, HIGH);
     delay(50);
 
-    // 4. INITIALIZE SPI BUS
-    SPI.begin(SPI_SCK_PIN, SPI_MISO_PIN, SPI_MOSI_PIN);
+    // 4. INITIALIZE SPI BUS WITH EXPLICIT CS
+    SPI.begin(SPI_SCK_PIN, SPI_MISO_PIN, SPI_MOSI_PIN, SD_CS_PIN);
     
     // 5. INITIALIZE LORA FIRST
     LoRa.setPins(LORA_CS_PIN, LORA_RST_PIN, LORA_DIO0_PIN);
@@ -330,7 +330,7 @@ void setup() {
         Serial.println("[ERROR] LoRa Ra-02 Init Failed!");
     }
 
-    digitalWrite(LORA_CS_PIN, HIGH); // Ensure LoRa CS is release
+    digitalWrite(LORA_CS_PIN, HIGH); // Ensure LoRa CS is released
     delay(10);
 
     // 6. INITIALIZE SD CARD SECOND
