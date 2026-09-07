@@ -12,21 +12,22 @@
 // ==========================================
 //  PIN DEFINITIONS (Seeed Studio XIAO ESP32-S3)
 // ==========================================
-#define I2C_SDA_PIN      5  // D4
-#define I2C_SCL_PIN      6  // D5
+#define I2C_SDA_PIN      5  // D4 (GPIO 5)
+#define I2C_SCL_PIN      6  // D5 (GPIO 6)
 
-#define SPI_SCK_PIN      7  // D8
-#define SPI_MISO_PIN     8  // D9
-#define SPI_MOSI_PIN     9  // D10
+#define SPI_SCK_PIN      7  // D8 (GPIO 7)
+#define SPI_MISO_PIN     8  // D9 (GPIO 8)
+#define SPI_MOSI_PIN     9  // D10 (GPIO 9)
 
-#define SD_CS_PIN        3  // D2
-#define LORA_CS_PIN      4  // D3
-#define LORA_RST_PIN     1  // D0
-#define LORA_DIO0_PIN    2  // D1
+#define SD_CS_PIN        3  // D2 (GPIO 3)
+#define LORA_CS_PIN      4  // D3 (GPIO 4)
+#define LORA_RST_PIN     1  // D0 (GPIO 1)
+#define LORA_DIO0_PIN    2  // D1 (GPIO 2)
 
-#define GPS_RX_PIN      44  // D7
-#define GPS_TX_PIN      -1  // Disabled to free GPIO 43
-#define SERVO_PIN       43  // D6 (Reassigned for parachute trigger)
+#define GPS_RX_PIN      44  // D6 (GPIO 43) - Corrected for GPS RX
+#define GPS_TX_PIN      -1  // Disabled to free GPIO
+#define SERVO_PIN       43  // D7 (GPIO 44) - Corrected for Parachute Servo
+#define ONBOARD_LED     21  // Built-in Yellow LED (Active-LOW)
 
 HardwareSerial GPSSerial(1);
 TinyGPSPlus gps;
@@ -74,7 +75,7 @@ const int SERVO_LOCKED_POS   = 0;
 const int SERVO_DEPLOY_POS   = 90;
 
 // ==========================================
-//  IMU CALIBRATION FUNCTION (GLOBAL SCOPE)
+//  IMU CALIBRATION FUNCTION
 // ==========================================
 void calibrateIMU() {
     const int samples = 500;
@@ -149,18 +150,17 @@ void TaskSensorSampling(void *pvParameters) {
             if (packet.baro_alt > max_altitude) {
                 max_altitude = packet.baro_alt;
             }
-            // Trigger if rocket passed arming altitude and dropped by threshold distance
             if ((max_altitude > APOGEE_ARM_ALT_M) && 
                 ((max_altitude - packet.baro_alt) >= APOGEE_DROP_M)) {
                 
                 apogee_triggered = true;
-                deployServo.write(SERVO_DEPLOY_POS); // Actuate servo mechanism
+                deployServo.write(SERVO_DEPLOY_POS); 
                 Serial.printf("[ACTION] APOGEE DETECTED AT %.2f m! Servo Deployed.\n", max_altitude);
             }
         }
         packet.apogee_triggered = apogee_triggered;
 
-        // 3. Read BMI160 IMU Data & Apply Offsets
+        // 3. Read BMI160 IMU Data
         int rawAx, rawAy, rawAz;
         int rawGx, rawGy, rawGz;
 
@@ -175,7 +175,7 @@ void TaskSensorSampling(void *pvParameters) {
         packet.gy = ((float)rawGy / 16.4f) - gy_offset;
         packet.gz = ((float)rawGz / 16.4f) - gz_offset;
 
-        // 4. Process GPS NMEA Stream
+        // 4. Process GPS Stream
         while (GPSSerial.available()) {
             gps.encode(GPSSerial.read());
         }
@@ -201,19 +201,19 @@ void TaskRadioAndLogging(void *pvParameters) {
     for (;;) {
         if (xQueueReceive(telemetryQueue, &packet, portMAX_DELAY) == pdTRUE) {
 
-            // Check for incoming manual override commands from ground station
-            int packetSize = LoRa.parsePacket();
-            if (packetSize) {
-                String incomingCommand = "";
-                while (LoRa.available()) {
-                    incomingCommand += (char)LoRa.read();
-                }
-    
-                // Verify command payload signature
-                if (incomingCommand.indexOf("CMD_DEPLOY") != -1 && !apogee_triggered) {
-                    apogee_triggered = true;
-                    deployServo.write(SERVO_DEPLOY_POS);
-                    Serial.println("[MANUAL OVERRIDE] Manual parachute trigger received from Ground Station!");
+            // Handle incoming manual override commands from ground station
+            if (loraInitialized) {
+                int packetSize = LoRa.parsePacket();
+                if (packetSize) {
+                    String incomingCommand = "";
+                    while (LoRa.available()) {
+                        incomingCommand += (char)LoRa.read();
+                    }
+                    if (incomingCommand.indexOf("CMD_DEPLOY") != -1 && !apogee_triggered) {
+                        apogee_triggered = true;
+                        deployServo.write(SERVO_DEPLOY_POS);
+                        Serial.println("[MANUAL OVERRIDE] Parachute trigger received!");
+                    }
                 }
             }
 
@@ -237,15 +237,23 @@ void TaskRadioAndLogging(void *pvParameters) {
             csvPacket += String(packet.apogee_triggered ? 1 : 0);
             csvPacket += "*";
 
+            // SD Card Operations (Explicit CS Isolation)
             if (sdInitialized && logFile) {
+                digitalWrite(LORA_CS_PIN, HIGH);
+                digitalWrite(SD_CS_PIN, LOW);
                 logFile.println(csvPacket);
                 if (packet.packet_id % 10 == 0) logFile.flush();
+                digitalWrite(SD_CS_PIN, HIGH);
             }
 
-            if (loraInitialized && (packet.packet_id % 7 == 0)) {
+            // LoRa Radio Downlink Operations (Explicit CS Isolation)
+            if (loraInitialized && (packet.packet_id % 5 == 0)) {
+                digitalWrite(SD_CS_PIN, HIGH);
+                digitalWrite(LORA_CS_PIN, LOW);
                 LoRa.beginPacket();
                 LoRa.print(csvPacket);
-                LoRa.endPacket(false); 
+                LoRa.endPacket(false);
+                digitalWrite(LORA_CS_PIN, HIGH);
             }
 
             vTaskDelay(pdMS_TO_TICKS(1));
@@ -258,10 +266,12 @@ void TaskRadioAndLogging(void *pvParameters) {
 // ==========================================
 void setup() {
     Serial.begin(115200);
+    pinMode(ONBOARD_LED, OUTPUT);
+    digitalWrite(ONBOARD_LED, LOW); // Turn ON LED during boot
+
     delay(1000); 
 
-    // 1. FORCE BOTH CHIP SELECT PINS HIGH IMMEDIATELY
-    // Prevents both modules from talking on MISO at the same time during boot
+    // 1. DESELECT BOTH SPI CHIP SELECT PINS IMMEDIATELY
     pinMode(SD_CS_PIN, OUTPUT);
     digitalWrite(SD_CS_PIN, HIGH);
     
@@ -292,23 +302,25 @@ void setup() {
         Serial.println("[ERROR] BMI160 IMU Init Failed!");
     }
 
-    // 3. HARDWARE RESET LORA MODULE (Pulse LOW -> HIGH)
+    // 3. HARDWARE RESET LORA MODULE (Clean pulse sequence)
     pinMode(LORA_RST_PIN, OUTPUT);
+    digitalWrite(LORA_RST_PIN, HIGH);
+    delay(10);
     digitalWrite(LORA_RST_PIN, LOW);
     delay(20);
     digitalWrite(LORA_RST_PIN, HIGH);
     delay(50);
 
-    // 4. INITIALIZE SPI BUS AT LOWER CLOCK FREQUENCY (1 MHz)
+    // 4. INITIALIZE SPI BUS
     SPI.begin(SPI_SCK_PIN, SPI_MISO_PIN, SPI_MOSI_PIN);
     
-    // 5. INITIALIZE LORA FIRST (Before SD Card claims SPI bus)
+    // 5. INITIALIZE LORA FIRST
     LoRa.setPins(LORA_CS_PIN, LORA_RST_PIN, LORA_DIO0_PIN);
     LoRa.setSPI(SPI);
-    LoRa.setSPIFrequency(1000000); // Lower SPI speed to pass high-impedance traces
 
     if (LoRa.begin(433E6)) { 
         loraInitialized = true;
+        LoRa.setSPIFrequency(1000000); // Set SPI speed after initialization
         LoRa.setTxPower(20);          
         LoRa.setSpreadingFactor(7);   
         LoRa.setSignalBandwidth(125E3);
@@ -318,10 +330,10 @@ void setup() {
         Serial.println("[ERROR] LoRa Ra-02 Init Failed!");
     }
 
-    // 6. INITIALIZE SD CARD SECOND (Slow speed down to 4 MHz)
-    digitalWrite(LORA_CS_PIN, HIGH); // Ensure LoRa is deselected
+    digitalWrite(LORA_CS_PIN, HIGH); // Ensure LoRa CS is release
     delay(10);
 
+    // 6. INITIALIZE SD CARD SECOND
     if (SD.begin(SD_CS_PIN, SPI, 4000000)) { 
         sdInitialized = true;
         logFile = SD.open("/flight_log.csv", FILE_APPEND);
@@ -333,6 +345,9 @@ void setup() {
     } else {
         Serial.println("[WARNING] SD Card Mount Failed!");
     }
+    digitalWrite(SD_CS_PIN, HIGH); // Ensure SD CS is released
+
+    digitalWrite(ONBOARD_LED, HIGH); // Turn OFF LED when setup finishes cleanly
 
     // 7. START FREERTOS TASKS
     xTaskCreatePinnedToCore(TaskSensorSampling, "SamplingTask", 4096, NULL, 2, NULL, 1);
