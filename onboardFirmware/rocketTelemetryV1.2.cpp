@@ -314,13 +314,13 @@ void setup() {
     // 4. INITIALIZE SPI BUS WITH EXPLICIT CS
     SPI.begin(SPI_SCK_PIN, SPI_MISO_PIN, SPI_MOSI_PIN, SD_CS_PIN);
     
-    // 5. INITIALIZE LORA FIRST
+    // 5. INITIALIZE LORA FIRST (Set SPI Frequency BEFORE LoRa.begin)
     LoRa.setPins(LORA_CS_PIN, LORA_RST_PIN, LORA_DIO0_PIN);
     LoRa.setSPI(SPI);
+    LoRa.setSPIFrequency(1000000); // FIXED: Must be called prior to LoRa.begin()
 
     if (LoRa.begin(433E6)) { 
         loraInitialized = true;
-        LoRa.setSPIFrequency(1000000); // Set SPI speed after initialization
         LoRa.setTxPower(20);          
         LoRa.setSpreadingFactor(7);   
         LoRa.setSignalBandwidth(125E3);
