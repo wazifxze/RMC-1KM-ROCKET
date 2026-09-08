@@ -67,6 +67,8 @@ df["Baro_Alt_m"] = 44330.0 * (
 )
 df["Accel_Mag_G"] = np.sqrt(df["AX"] ** 2 + df["AY"] ** 2 + df["AZ"] ** 2)
 
+print(len(df))
+
 # 8. Render Graphs
 fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(10, 8), sharex=True)
 
@@ -101,4 +103,5 @@ ax3.legend()
 
 plt.suptitle("MRCC CanSat Flight Telemetry Profile", fontsize=14)
 plt.tight_layout()
+plt.savefig("flight_plot.png")
 plt.show()

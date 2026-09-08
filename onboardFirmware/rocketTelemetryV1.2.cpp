@@ -330,6 +330,12 @@ void setup() {
         Serial.println("[ERROR] LoRa Ra-02 Init Failed!");
     }
 
+    // Ensure LoRa is deselected
+    pinMode(LORA_CS_PIN, OUTPUT);
+    digitalWrite(LORA_CS_PIN, HIGH);
+
+    // Ensure SD is deselected, then initialize at 1 MHz
+    pinMode(SD_CS_PIN, OUTPUT);
     digitalWrite(LORA_CS_PIN, HIGH); // Ensure LoRa CS is released
     delay(10);
 
