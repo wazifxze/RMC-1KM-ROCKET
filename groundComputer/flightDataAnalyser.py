@@ -32,9 +32,9 @@ def analyze_rocket_telemetry(file_path):
         return False
 
     headers = [
-        "HEADER", "PACKET_ID", "TIME_MS", "PRESS_HPA", "TEMP_C", 
-        "AX", "AY", "AZ", "GX", "GY", "GZ", 
-        "GPS_FIX", "GPS_LAT", "GPS_LON", "GPS_ALT", "GPS_SATS"
+        "PREFIX", "PACKET_ID", "TIME_MS", "PRESS_HPA", "TEMP_C", 
+        "AX", "AY", "AZ", "GX", "GY", "GZ", "EXTRA_VAL",
+        "GPS_FIX", "GPS_LAT", "GPS_LON", "GPS_ALT", "GPS_SATS", "CHECKSUM"
     ]
     
     # 2. Build DataFrame and Coerce Numeric Types
@@ -43,8 +43,8 @@ def analyze_rocket_telemetry(file_path):
         
         num_cols = [
             "PACKET_ID", "TIME_MS", "PRESS_HPA", "TEMP_C", 
-            "AX", "AY", "AZ", "GX", "GY", "GZ", 
-            "GPS_FIX", "GPS_LAT", "GPS_LON", "GPS_ALT", "GPS_SATS"
+            "AX", "AY", "AZ", "GX", "GY", "GZ", "EXTRA_VAL",
+            "GPS_FIX", "GPS_LAT", "GPS_LON", "GPS_ALT", "GPS_SATS", "CHECKSUM"
         ]
         
         # Convert non-numeric header strings (like "PACKET_ID") into NaN
@@ -221,7 +221,6 @@ def analyze_rocket_telemetry(file_path):
 
 
 if __name__ == "__main__":
-    # Select filename from terminal arg or default file
     TARGET_FILE = sys.argv[1] if len(sys.argv) > 1 else "flight_log.csv"
 
     print(f"[DEBUG] Current Directory : {os.getcwd()}")
