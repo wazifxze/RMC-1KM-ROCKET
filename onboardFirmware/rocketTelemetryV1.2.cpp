@@ -334,7 +334,7 @@ void setup() {
     delay(10);
 
     // 6. INITIALIZE SD CARD SECOND
-    if (SD.begin(SD_CS_PIN, SPI, 4000000)) { 
+    if (SD.begin(SD_CS_PIN, SPI, 1000000)) { 
         sdInitialized = true;
         logFile = SD.open("/flight_log.csv", FILE_APPEND);
         if (logFile) {
