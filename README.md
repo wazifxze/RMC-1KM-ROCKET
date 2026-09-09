@@ -1,4 +1,4 @@
-# Project Horizon: Dual-Core ESP32-S3 CanSat Flight Computer
+# Project Aezenith: Dual-Core ESP32-S3 CanSat Flight Computer
 
 A high-reliability, dual-core telemetry and recovery flight system designed for competitive CanSat operations, powered by the Seeed Studio XIAO ESP32-S3.
 
