@@ -44,13 +44,3 @@ The firmware breaks away from traditional single-loop blocking code by distribut
 * **Manual Over-the-Air Override:** Ground station operators can remotely force parachute deployment at any time by transmitting an encrypted `CMD_DEPLOY` command packet via LoRa.
 
 ---
-
-## 📂 Repository Structure
-
-```text
-├── src/
-│   ├── main.cpp             # Core FreeRTOS initialization and task definitions
-│   ├── flight_tasks.cpp     # Sensor sampling and radio/logging loops
-│   └── config.h             # Pin definitions and calibration constants
-├── schematics/              # Custom PCB layout and wiring diagrams
-└── README.md                # Project documentation
