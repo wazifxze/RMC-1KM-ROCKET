@@ -1,9 +1,56 @@
-The system is now a four-node pipeline rather than three, though the core division of responsibility hasn't changed — it's simply been extended along the same architectural lines that were already in place. The rocket-side firmware remains solely responsible for sensor acquisition, timestamping, and dual-path delivery of raw telemetry, and the addition of GPS didn't disturb that boundary at all: the NEO-6M is read on its own dedicated hardware UART, fused into the same TelemetryPacket struct as the barometric and inertial data, and pushed through the identical FreeRTOS queue and dual-core task split that was already handling everything else. Nothing about how the rocket firmware is organized had to change to accommodate a new sensor — it simply became one more field in an existing packet, produced on the same core, at the same 50Hz cadence, and handed off through the same non-blocking queue discipline as pressure, temperature, and IMU data.
+# Project Horizon: Dual-Core ESP32-S3 CanSat Flight Computer
 
-The ground receiver's role is entirely unchanged, and that consistency is itself worth noting. It was designed from the outset to treat the telemetry payload as an opaque string it never inspects, only appending the two pieces of information — RSSI and SNR — that only it can measure. Adding five new GPS fields to the payload required precisely zero modifications to this file, which is the clearest evidence that the original "dumb relay" design decision was the correct one: a component that doesn't parse content can absorb an arbitrary number of upstream schema changes without ever being touched.
+A high-reliability, dual-core telemetry and recovery flight system designed for competitive CanSat operations, powered by the Seeed Studio XIAO ESP32-S3.
 
-The ground computer picks up where it always did, parsing the extended CSV string, now pulling five additional GPS fields alongside the original ten, and continuing to drive the same 3D attitude visualization and complementary filter exactly as before — the addition of position data didn't alter how orientation is estimated or displayed, since attitude and position are independent quantities computed from independent sensors. What's new is a second, deliberately separate consumer of that same parsed data: a lightweight local web server that maintains its own live snapshot of the rocket's most recent GPS fix and breadcrumb trail, and a browser-based map that polls it roughly once a second to render position in real time. This was built as a second window rather than folded into the existing vpython scene because the two visualizations answer fundamentally different operational questions — the 3D cylinder answers "which way is the vehicle pointed," which matters most in flight, while the map answers "where do I walk or drive to," which matters most after it's landed. Keeping them as separate, independently running consumers of the same telemetry stream means a slowdown or crash in one has no effect on the other, the same fault-isolation principle that already governed the rocket's SD-card-versus-radio split.
+## 🚀 System Overview
 
-The map's offline capability is the newest architectural idea introduced into the system, and it follows the same philosophy as everything that came before it: do the expensive, failure-prone work ahead of time, at the point where conditions are favorable, rather than depending on it succeeding live in the field. Just as the rocket firmware performs its IMU range configuration once at boot rather than trusting an assumed default, and just as the radio link relies on a CRC check computed once at the hardware level rather than trusting the payload's contents to be correct, the offline tile cache is downloaded once, in advance, while an internet connection is available and convenient — so that on launch day, in a recovery zone that may have no signal at all, the map's correctness no longer depends on a network being present. Across all four nodes now, the same underlying discipline holds: know what each component can and cannot guarantee about its environment, and design so that a failure of one assumption degrades gracefully rather than silently corrupting or halting the whole system.
+Project Horizon is an advanced, deterministic flight computer built to handle high-frequency sensor acquisition, real-time apogee detection, thread-safe local data logging, and wireless LoRa telemetry downlinks simultaneously. By utilizing FreeRTOS task distribution across the ESP32-S3's dual cores, the system completely eliminates timing bottlenecks and bus contention during critical flight phases.
 
-these program can be considered finnished the writing phase but i never test it on the actual hardware yet
+## 🛠️ Hardware & Pinout Mapping
+
+| Component | Model / Chip | Protocol | GPIO / Pin Mapping |
+| :--- | :--- | :--- | :--- |
+| **Microcontroller** | Seeed Studio XIAO ESP32-S3 | Core System | Dual-Core Tensilica Xtensa LX7 |
+| **Barometer** | BME280 | I2C | SDA: D4 (GPIO 5), SCL: D5 (GPIO 6) |
+| **IMU** | BMI160 (6-DoF) | I2C | Shared I2C Bus (`0x69`) |
+| **GPS Module** | NEO-6M | UART (Rx-only) | RX: D7 (GPIO 44), TX: Disabled (`-1`) |
+| **Radio Transceiver** | Ra-02 LoRa (433MHz) | SPI | CS: D3 (GPIO 4), RST: D0 (GPIO 1), DIO0: D1 (GPIO 2) |
+| **Storage** | MicroSD Card Module | SPI | CS: D2 (GPIO 3) |
+| **Actuator** | Servo Motor (Parachute) | PWM | GPIO 43 (D6) |
+| **Shared SPI Bus** | SCK: D8 (GPIO 7), MISO: D9 (GPIO 8), MOSI: D10 (GPIO 9) |
+
+---
+
+## ⚡ Software Architecture & FreeRTOS Design
+
+The firmware breaks away from traditional single-loop blocking code by distributing responsibilities across a real-time operating system (FreeRTOS):
+
+* **Core 1 (High-Speed Sampling Task - 50Hz):** 
+  * Polls atmospheric pressure from the BME280 and calculates high-precision relative altitude.
+  * Reads raw 6-DoF linear acceleration and rotational velocity vectors from the BMI160 IMU.
+  * Continuously drains and parses incoming NMEA character streams from the NEO-6M GPS.
+  * Runs the real-time apogee detection state machine.
+* **Core 0 (Background I/O & Radio Task):** 
+  * Pulls formatted telemetry packets out of a thread-safe FreeRTOS queue.
+  * Manages non-blocking MicroSD CSV file writing with explicit Chip Select arbitration.
+  * Broadcasts 433MHz LoRa data packets and listens asynchronously for over-the-air commands (`CMD_DEPLOY`).
+
+---
+
+## 🎯 Flight Logic & Safety Mechanisms
+
+* **Dual-Condition Apogee Trigger:** To prevent false positives from boost-phase vibration or ignition spikes, parachute deployment requires clearing an arming threshold of **15 meters**, followed by a verified downward drop of **2.5 meters** from the peak recorded altitude.
+* **Explicit SPI Bus Arbitration:** Because the MicroSD card and LoRa radio share a common SPI bus, the firmware forces active-LOW Chip Select isolation and a stable 1 MHz clock speed to prevent data collisions and bus lockups.
+* **Manual Over-the-Air Override:** Ground station operators can remotely force parachute deployment at any time by transmitting an encrypted `CMD_DEPLOY` command packet via LoRa.
+
+---
+
+## 📂 Repository Structure
+
+```text
+├── src/
+│   ├── main.cpp             # Core FreeRTOS initialization and task definitions
+│   ├── flight_tasks.cpp     # Sensor sampling and radio/logging loops
+│   └── config.h             # Pin definitions and calibration constants
+├── schematics/              # Custom PCB layout and wiring diagrams
+└── README.md                # Project documentation
