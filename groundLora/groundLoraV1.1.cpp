@@ -43,7 +43,13 @@ void loop() {
     // 1. Read telemetry from rocket as normal
     int packetSize = LoRa.parsePacket();
     if (packetSize) {
-        // Read and forward packet to Python over Serial...
+        String receivedPacket = "";
+        while (LoRa.available()) {
+            receivedPacket += (char)LoRa.read();
+        }
+        
+        // Forward the exact CANSAT telemetry string to the Python ground station over USB Serial
+        Serial.println(receivedPacket);
     }
 
     // 2. Check for trigger command from Python script via USB Serial
@@ -52,7 +58,6 @@ void loop() {
         serialInput.trim();
         
         if (serialInput == "TRIGGER_SERVO") {
-            // Transmit manual deploy command over LoRa 3 times for redundancy
             for (int i = 0; i < 3; i++) {
                 LoRa.beginPacket();
                 LoRa.print("$CMD,CMD_DEPLOY*");
