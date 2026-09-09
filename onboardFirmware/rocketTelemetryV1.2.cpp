@@ -70,9 +70,15 @@ bool apogee_triggered = false;
 const float APOGEE_ARM_ALT_M = 15.0;  // Minimum altitude above ground to arm trigger
 const float APOGEE_DROP_M    = 2.5;   // Altitude drop from peak required to declare apogee
 
-// Servo Positions (Degrees)
+// Servo Positions (Logical Degrees) & Inversion Config from Bench Test
 const int SERVO_LOCKED_POS   = 0;
 const int SERVO_DEPLOY_POS   = 90;
+const bool INVERT_SERVO_DIR  = true; // Applied based on verified test configuration (Inverted: YES)
+
+void writeServo(int angle) {
+    int target = INVERT_SERVO_DIR ? (180 - angle) : angle;
+    deployServo.write(target);
+}
 
 // ==========================================
 //  IMU CALIBRATION FUNCTION
@@ -154,7 +160,7 @@ void TaskSensorSampling(void *pvParameters) {
                 ((max_altitude - packet.baro_alt) >= APOGEE_DROP_M)) {
                 
                 apogee_triggered = true;
-                deployServo.write(SERVO_DEPLOY_POS); 
+                writeServo(SERVO_DEPLOY_POS); 
                 Serial.printf("[ACTION] APOGEE DETECTED AT %.2f m! Servo Deployed.\n", max_altitude);
             }
         }
@@ -211,7 +217,7 @@ void TaskRadioAndLogging(void *pvParameters) {
                     }
                     if (incomingCommand.indexOf("CMD_DEPLOY") != -1 && !apogee_triggered) {
                         apogee_triggered = true;
-                        deployServo.write(SERVO_DEPLOY_POS);
+                        writeServo(SERVO_DEPLOY_POS);
                         Serial.println("[MANUAL OVERRIDE] Parachute trigger received!");
                     }
                 }
@@ -280,7 +286,7 @@ void setup() {
 
     // 2. ATTACH SERVO & INITIALIZE I2C SENSORS
     deployServo.attach(SERVO_PIN);
-    deployServo.write(SERVO_LOCKED_POS);
+    writeServo(SERVO_LOCKED_POS);
 
     GPSSerial.begin(9600, SERIAL_8N1, GPS_RX_PIN, GPS_TX_PIN);
     telemetryQueue = xQueueCreate(20, sizeof(TelemetryPacket));
