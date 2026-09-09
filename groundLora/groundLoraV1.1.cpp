@@ -58,13 +58,14 @@ void loop() {
         serialInput.trim();
         
         if (serialInput == "TRIGGER_SERVO") {
-            for (int i = 0; i < 3; i++) {
+            for (int i = 0; i < 5; i++) {
                 LoRa.beginPacket();
                 LoRa.print("$CMD,CMD_DEPLOY*");
                 LoRa.endPacket(false);
-                delay(50);
+                // Randomized backoff (100ms - 250ms) to clear the rocket's half-duplex TX window
+                delay(random(100, 250));
             }
-            Serial.println("[GROUND] Manual Deploy Command Transmitted!");
+            Serial.println("[GROUND] Manual Deploy Command Transmitted with Randomized Backoff!");
         }
     }
 }
