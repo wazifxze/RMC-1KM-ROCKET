@@ -1,7 +1,7 @@
 import serial
 import time
 
-COM_PORT = 'COM5'  # Change to your ground station receiver port
+COM_PORT = 'COM7'  # Change to your ground station receiver port
 BAUD_RATE = 115200
 
 def trigger_parachute():
