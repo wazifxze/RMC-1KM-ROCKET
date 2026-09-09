@@ -4,7 +4,7 @@ A high-reliability, dual-core telemetry and recovery flight system designed for 
 
 ## 🚀 System Overview
 
-Project Horizon is an advanced, deterministic flight computer built to handle high-frequency sensor acquisition, real-time apogee detection, thread-safe local data logging, and wireless LoRa telemetry downlinks simultaneously. By utilizing FreeRTOS task distribution across the ESP32-S3's dual cores, the system completely eliminates timing bottlenecks and bus contention during critical flight phases.
+Project Aezenith is an advanced, deterministic flight computer built to handle high-frequency sensor acquisition, real-time apogee detection, thread-safe local data logging, and wireless LoRa telemetry downlinks simultaneously. By utilizing FreeRTOS task distribution across the ESP32-S3's dual cores, the system completely eliminates timing bottlenecks and bus contention during critical flight phases.
 
 ## 🛠️ Hardware & Pinout Mapping
 
