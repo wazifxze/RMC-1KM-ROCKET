@@ -41,6 +41,6 @@ The firmware breaks away from traditional single-loop blocking code by distribut
 
 * **Dual-Condition Apogee Trigger:** To prevent false positives from boost-phase vibration or ignition spikes, parachute deployment requires clearing an arming threshold of **15 meters**, followed by a verified downward drop of **2.5 meters** from the peak recorded altitude.
 * **Explicit SPI Bus Arbitration:** Because the MicroSD card and LoRa radio share a common SPI bus, the firmware forces active-LOW Chip Select isolation and a stable 1 MHz clock speed to prevent data collisions and bus lockups.
-* **Manual Over-the-Air Override:** Ground station operators can remotely force parachute deployment at any time by transmitting an encrypted `CMD_DEPLOY` command packet via LoRa.
+* **Manual Over-the-Air Override:** Ground station operators can remotely force parachute deployment at any time by transmitting an encrypted `manualParachuteTrigger.py` command packet via LoRa.
 
 ---
