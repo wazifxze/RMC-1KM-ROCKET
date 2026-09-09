@@ -3,7 +3,7 @@ import math
 from vpython import *
 import gps_map_server
 
-#start gps server for map visualisation
+# Start GPS server for map visualisation
 gps_map_server.start_server(port=8000)
 
 # ==========================================
@@ -86,25 +86,33 @@ while True:
                 clean_payload = line[8:-1]
                 fields = clean_payload.split(",")
 
-                packet_id    = int  (fields[0])
-                timestamp_ms = int  (fields[1])
-                pressure     = float(fields[2])
-                temperature  = float(fields[3])
-                ax           = float(fields[4])
-                ay           = float(fields[5])
-                az           = float(fields[6])
-                gx           = float(fields[7])
-                gy           = float(fields[8])
-                gz           = float(fields[9])
-                gps_fix      = int  (fields[10])
-                gps_lat      = float(fields[11])
-                gps_lon      = float(fields[12])
-                gps_alt      = float(fields[13])
-                gps_sats     = int  (fields[14])
-                rssi         = int  (fields[15])  if len(fields) > 15 else -1
-                snr          = float(fields[16])  if len(fields) > 16 else 0.0
+                if len(fields) < 17:
+                    continue
 
-                #update data to GPS
+                # Corrected field mapping matching C++ firmware structure
+                packet_id        = int(fields[0])
+                timestamp_ms     = int(fields[1])
+                pressure         = float(fields[2])
+                temperature      = float(fields[3])
+                baro_alt         = float(fields[4])  # Correctly extracted
+                ax               = float(fields[5])
+                ay               = float(fields[6])
+                az               = float(fields[7])
+                gx               = float(fields[8])
+                gy               = float(fields[9])
+                gz               = float(fields[10])
+                gps_fix          = int(fields[11])
+                gps_lat          = float(fields[12])
+                gps_lon          = float(fields[13])
+                gps_alt          = float(fields[14])
+                gps_sats         = int(fields[15])
+                apogee_triggered = int(fields[16])
+                
+                # Optional 18th parameter slot (e.g., RSSI if appended by ground node)
+                rssi = int(fields[17]) if len(fields) > 17 else -1
+                snr  = float(fields[18]) if len(fields) > 18 else 0.0
+
+                # Update data to GPS mapping server
                 gps_map_server.update_gps(gps_lat, gps_lon, gps_alt, gps_fix, gps_sats, timestamp_ms)
 
                 # --- 1. PACKET LOSS TRACKER ---
@@ -122,39 +130,29 @@ while True:
                 if last_timestamp_ms is not None:
                     dt = (timestamp_ms - last_timestamp_ms) / 1000.0
                     
-                    if 0.0 < dt < 2.0: # Valid time step
-                        # Instantaneous static tilt from Accelerometer
+                    if 0.0 < dt < 2.0:
                         denom = math.sqrt(ay**2 + az**2)
                         accel_pitch = math.degrees(math.atan2(ax, denom if denom != 0 else 0.001))
                         accel_roll  = math.degrees(math.atan2(ay, math.sqrt(ax**2 + az**2)))
 
-                        # Calculate total linear acceleration magnitude (|a|)
                         total_accel = math.sqrt(ax**2 + ay**2 + az**2)
 
-                        # DYNAMIC ALPHA:
-                        # If |a| is near 1.0g (coasting/pad), rely 98% on gyro, 2% on accel.
-                        # If |a| > 1.3g (MOTOR BURN), ignore accel entirely (Alpha = 1.0) to prevent distortion!
                         if 0.85 < total_accel < 1.15:
                             alpha = 0.98
                         else:
-                            alpha = 1.0  # Pure Gyro integration during thrust/freefall
+                            alpha = 1.0
 
-                        # Apply Complementary Filter Equation
                         pitch_deg = alpha * (pitch_deg + gy * dt) + (1.0 - alpha) * accel_pitch
                         roll_deg  = alpha * (roll_deg  + gx * dt) + (1.0 - alpha) * accel_roll
                         yaw_deg  += gz * dt
 
                 last_timestamp_ms = timestamp_ms
 
-                # Radians conversion for 3D engine
                 pitch_rad = math.radians(pitch_deg)
                 roll_rad  = math.radians(roll_deg)
                 yaw_rad   = math.radians(yaw_deg)
 
-                # --- 3. BAROMETRIC ALTITUDE ---
-                altitude = 44330.0 * (1.0 - (pressure / SEA_LEVEL_PRESSURE) ** (1.0 / 5.255))
-
-                # --- 4. UPDATE 3D MODEL ORIENTATION ---
+                # --- 3. UPDATE 3D MODEL ORIENTATION ---
                 dir_x = math.sin(roll_rad) * math.cos(pitch_rad)
                 dir_y = -math.sin(pitch_rad)
                 dir_z = math.cos(roll_rad) * math.cos(pitch_rad)
@@ -165,13 +163,15 @@ while True:
                 rocket.axis = orient_vec * ROCKET_LENGTH
                 rocket.pos = -0.5 * rocket.axis
 
-                # --- 5. HUD OVERLAY ---
+                # --- 4. HUD OVERLAY ---
+                apogee_status = "ARMED / STABLE" if not apogee_triggered else "DEPLOYED!"
                 telemetry_label.text = (
                     f"--- ROCKET TELEMETRY LINK ACTIVE ---\n"
                     f"Packet ID: {packet_id} | Time: {timestamp_ms / 1000.0:.2f} s\n"
                     f"Rx Count: {total_received} | Dropped: {total_dropped} | Loss: {loss_percentage:.1f}%\n"
-                    f"LoRa Link Quality: RSSI {rssi} dBm | SNR {snr:.1f} dB\n"
-                    f"Altitude: {altitude:.1f} m | Pressure: {pressure:.2f} hPa | Temp: {temperature:.1f} °C\n"
+                    f"Flight Status: Apogee State -> {apogee_status}\n"
+                    f"Baro Altitude: {baro_alt:.1f} m | Pressure: {pressure:.2f} hPa | Temp: {temperature:.1f} °C\n"
+                    f"GPS Fix: {gps_fix} | Sats: {gps_sats} | Lat/Lon: [{gps_lat:.6f}, {gps_lon:.6f}]\n"
                     f"Pitch: {pitch_deg:.1f}° | Roll: {roll_deg:.1f}° | Yaw: {yaw_deg:.1f}°\n"
                     f"Accel [G]: [{ax:.2f}, {ay:.2f}, {az:.2f}] | Gyro [°/s]: [{gx:.1f}, {gy:.1f}, {gz:.1f}]"
                 )
