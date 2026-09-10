@@ -15,15 +15,13 @@ import matplotlib.pyplot as plt
 SERIAL_PORT = 'COM7'
 BAUD_RATE = 115200
 
-# Path to your downloaded map image (PNG, JPG, or WEBP)
 MAP_IMAGE_PATH = 'map.png'
 
-# Geographic bounding box of your downloaded map image
 MAP_BOUNDS = {
-    'lon_min': 101.6500,  # Left longitude edge
-    'lon_max': 101.7500,  # Right longitude edge
-    'lat_min': 3.0000,    # Bottom latitude edge
-    'lat_max': 3.1000     # Top latitude edge
+    'lon_min': 100.806931,  # Left coordinate (West)
+    'lon_max': 100.874914,  # Right coordinate (East)
+    'lat_min': 4.038686,    # Bottom coordinate (South)
+    'lat_max': 4.096436     # Top coordinate (North)
 }
 
 MAX_PLOT_POINTS = 500  # Rolling window size for performance
@@ -145,6 +143,10 @@ try:
         if ser and ser.in_waiting > 0:
             try:
                 line = ser.readline().decode('utf-8', errors='ignore').strip()
+
+                if line:
+                    # Print raw incoming data stream
+                    print(f"[RAW] {line}")
 
                 if line.startswith("$CANSAT,") and line.endswith("*"):
                     clean_payload = line[8:-1]
