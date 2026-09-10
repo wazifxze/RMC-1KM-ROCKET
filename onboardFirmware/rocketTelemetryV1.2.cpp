@@ -42,6 +42,7 @@ struct TelemetryPacket {
     float pressure;      // hPa
     float temperature;   // Deg C
     float baro_alt;      // Relative Altitude (m)
+    float vert_vel;      // Kalman Fused Vertical Velocity (m/s)
     float ax, ay, az;    // G-forces (g)
     float gx, gy, gz;    // Angular velocity (deg/s)
     double gps_lat, gps_lon;
@@ -63,10 +64,27 @@ float ax_offset = 0.0, ay_offset = 0.0, az_offset = 0.0;
 float gx_offset = 0.0, gy_offset = 0.0, gz_offset = 0.0;
 float ground_pressure_hpa = 1013.25;
 
-float max_altitude = 0.0;
+// ==========================================
+//  HYBRID APOGEE & KALMAN CONFIGURATION
+// ==========================================
+const float MIN_ARM_ALT_M            = 15.0f;  // Safety Gate 1: Must exceed 15m AGL
+const float MIN_ARM_VELOCITY_MPS     = 8.0f;   // Safety Gate 2: Must exceed +8.0 m/s ascent
+const float APOGEE_VEL_TRIGGER       = 0.0f;   // Primary Trigger: Fused velocity drops <= 0 m/s
+const float APOGEE_ALT_DROP_FALLBACK = 3.0f;   // Backup Trigger: Altitude drops 3m below peak
+
+bool system_armed     = false;
 bool apogee_triggered = false;
-const float APOGEE_ARM_ALT_M = 15.0;  
-const float APOGEE_DROP_M    = 2.5;   
+float max_altitude    = 0.0f;
+
+// 2-State Kalman Filter (Altitude & Velocity)
+float kf_alt = 0.0f;
+float kf_vel = 0.0f;
+float P_00 = 1.0f, P_01 = 0.0f;
+float P_10 = 0.0f, P_11 = 1.0f;
+
+// Noise Covariances (Tuning Parameters)
+const float Q_ACCEL = 0.5f;   // Process noise (Accelerometer variance)
+const float R_BARO  = 0.25f;  // Measurement noise (Barometer variance)
 
 // Servo Configuration
 const int SERVO_LOCKED_POS   = 0;
@@ -99,7 +117,7 @@ void calibrateIMU() {
     }
     ax_offset = sum_ax / samples;
     ay_offset = sum_ay / samples;
-    az_offset = (sum_az / samples) - 1.0f; 
+    az_offset = (sum_az / samples) - 1.0f; // Calibrates rest state to precisely 1.0g vertical
     gx_offset = sum_gx / samples;
     gy_offset = sum_gy / samples;
     gz_offset = sum_gz / samples;
@@ -115,26 +133,58 @@ void calibrateGroundPressure() {
     ground_pressure_hpa = sum_pressure / samples;
 }
 
+// Fuses IMU vertical acceleration and BME280 barometric altitude
+void updateKalmanFilter(float baro_alt, float accel_z_g, float dt) {
+    if (dt <= 0.001f) return;
+
+    // Convert vertical Gs to m/s^2 (subtracting 1g gravity constant)
+    float a_vert = (accel_z_g - 1.0f) * 9.81f;
+
+    // 1. Prediction Step
+    kf_alt += kf_vel * dt + 0.5f * a_vert * dt * dt;
+    kf_vel += a_vert * dt;
+
+    // Covariance extrapolation: P = F * P * F^T + Q
+    P_00 += dt * (P_10 + P_01 + dt * P_11) + Q_ACCEL * dt * dt;
+    P_01 += dt * P_11;
+    P_10 += dt * P_11;
+    P_11 += Q_ACCEL * dt;
+
+    // 2. Innovation Step (Barometer Correction)
+    float y = baro_alt - kf_alt; 
+    float S = P_00 + R_BARO;    
+
+    float K_0 = P_00 / S; // Kalman gain (Altitude)
+    float K_1 = P_10 / S; // Kalman gain (Velocity)
+
+    kf_alt += K_0 * y;
+    kf_vel += K_1 * y;
+
+    // Covariance Update: P = (I - K * H) * P
+    float P00_temp = P_00;
+    float P01_temp = P_01;
+
+    P_00 -= K_0 * P00_temp;
+    P_01 -= K_0 * P01_temp;
+    P_10 -= K_1 * P00_temp;
+    P_11 -= K_1 * P01_temp;
+}
+
 void TaskSensorSampling(void *pvParameters) {
     uint32_t packetCounter = 0;
+    uint32_t last_sample_ms = millis();
+
     for (;;) {
         TelemetryPacket packet;
         packet.packet_id = ++packetCounter;
         packet.timestamp_ms = millis();
 
+        float dt = (packet.timestamp_ms - last_sample_ms) / 1000.0f;
+        last_sample_ms = packet.timestamp_ms;
+
         packet.pressure = bme.readPressure() / 100.0F;
         packet.temperature = bme.readTemperature();
         packet.baro_alt = bme.readAltitude(ground_pressure_hpa);
-
-        if (!apogee_triggered) {
-            if (packet.baro_alt > max_altitude) max_altitude = packet.baro_alt;
-            if ((max_altitude > APOGEE_ARM_ALT_M) && ((max_altitude - packet.baro_alt) >= APOGEE_DROP_M)) {
-                apogee_triggered = true;
-                writeServo(SERVO_DEPLOY_POS); 
-                Serial.printf("[ACTION] APOGEE DETECTED AT %.2f m! Servo Deployed.\n", max_altitude);
-            }
-        }
-        packet.apogee_triggered = apogee_triggered;
 
         int rawAx, rawAy, rawAz, rawGx, rawGy, rawGz;
         BMI160.readAccelerometer(rawAx, rawAy, rawAz);
@@ -146,6 +196,39 @@ void TaskSensorSampling(void *pvParameters) {
         packet.gx = ((float)rawGx / 16.4f) - gx_offset;
         packet.gy = ((float)rawGy / 16.4f) - gy_offset;
         packet.gz = ((float)rawGz / 16.4f) - gz_offset;
+
+        // Run 1D Kalman Filter Fusion
+        updateKalmanFilter(packet.baro_alt, packet.az, dt);
+        packet.vert_vel = kf_vel;
+
+        // Track Peak Altitude
+        if (packet.baro_alt > max_altitude) {
+            max_altitude = packet.baro_alt;
+        }
+
+        // --- HYBRID APOGEE DETECTION ---
+        if (!apogee_triggered) {
+            // 1. Dual Safety Arming (Requires clearance altitude AND upward velocity)
+            if (!system_armed && (packet.baro_alt >= MIN_ARM_ALT_M) && (packet.vert_vel >= MIN_ARM_VELOCITY_MPS)) {
+                system_armed = true;
+                Serial.printf("[ARMED] Hybrid criteria met! Alt: %.2f m | Vel: %.2f m/s\n", packet.baro_alt, packet.vert_vel);
+            }
+
+            // 2. Redundant Deployment Triggering
+            if (system_armed) {
+                bool primary_zero_vel = (packet.vert_vel <= APOGEE_VEL_TRIGGER);
+                bool backup_baro_drop = ((max_altitude - packet.baro_alt) >= APOGEE_ALT_DROP_FALLBACK);
+
+                if (primary_zero_vel || backup_baro_drop) {
+                    apogee_triggered = true;
+                    writeServo(SERVO_DEPLOY_POS); 
+                    Serial.printf("[ACTION] APOGEE DETECTED via %s! Alt: %.2f m | Vel: %.2f m/s\n",
+                                  primary_zero_vel ? "Zero Velocity (Kalman)" : "Altitude Drop Fallback",
+                                  packet.baro_alt, packet.vert_vel);
+                }
+            }
+        }
+        packet.apogee_triggered = apogee_triggered;
 
         while (GPSSerial.available()) {
             gps.encode(GPSSerial.read());
@@ -164,7 +247,7 @@ void TaskSensorSampling(void *pvParameters) {
 void TaskRadioAndLogging(void *pvParameters) {
     TelemetryPacket packet;
     for (;;) {
-        // 1. Check for incoming LoRa commands and log metrics to SD card
+        // Handle incoming manual override commands over LoRa
         if (loraInitialized) {
             int packetSize = LoRa.parsePacket();
             if (packetSize) {
@@ -177,9 +260,6 @@ void TaskRadioAndLogging(void *pvParameters) {
                 int rssi = LoRa.packetRssi();
                 float snr = LoRa.packetSnr();
 
-                Serial.printf("[RX] Size: %d | RSSI: %d | SNR: %.2f | Payload: %s\n", packetSize, rssi, snr, incomingCommand.c_str());
-
-                // Log incoming packet details to SD Card with explicit CS isolation
                 if (sdInitialized) {
                     digitalWrite(LORA_CS_PIN, HIGH);
                     digitalWrite(SD_CS_PIN, LOW);
@@ -204,7 +284,7 @@ void TaskRadioAndLogging(void *pvParameters) {
             }
         }
 
-        // 2. Process telemetry queue for logging and throttled downlink
+        // Handle downlink telemetry and SD recording
         if (xQueueReceive(telemetryQueue, &packet, pdMS_TO_TICKS(5)) == pdTRUE) {
             String csvPacket  = "$CANSAT,";
             csvPacket += String(packet.packet_id) + ",";
@@ -212,6 +292,7 @@ void TaskRadioAndLogging(void *pvParameters) {
             csvPacket += String(packet.pressure, 2) + ",";
             csvPacket += String(packet.temperature, 2) + ",";
             csvPacket += String(packet.baro_alt, 2) + ",";
+            csvPacket += String(packet.vert_vel, 2) + ",";
             csvPacket += String(packet.ax, 2) + ",";
             csvPacket += String(packet.ay, 2) + ",";
             csvPacket += String(packet.az, 2) + ",";
@@ -226,7 +307,6 @@ void TaskRadioAndLogging(void *pvParameters) {
             csvPacket += String(packet.apogee_triggered ? 1 : 0);
             csvPacket += "*";
 
-            // SD Card Telemetry Logging
             if (sdInitialized && logFile) {
                 digitalWrite(LORA_CS_PIN, HIGH);
                 digitalWrite(SD_CS_PIN, LOW);
@@ -235,7 +315,6 @@ void TaskRadioAndLogging(void *pvParameters) {
                 digitalWrite(SD_CS_PIN, HIGH);
             }
 
-            // Throttled LoRa Downlink (every 20 packets to prevent collisions)
             if (loraInitialized && (packet.packet_id % 20 == 0)) {
                 digitalWrite(SD_CS_PIN, HIGH);
                 digitalWrite(LORA_CS_PIN, LOW);
@@ -259,7 +338,6 @@ void setup() {
     pinMode(LORA_CS_PIN, OUTPUT);
     digitalWrite(LORA_CS_PIN, HIGH);
 
-    // Allocate PWM timers for ESP32-S3 servo reliability
     ESP32PWM::allocateTimer(0);
     ESP32PWM::allocateTimer(1);
     ESP32PWM::allocateTimer(2);
@@ -285,7 +363,6 @@ void setup() {
         calibrateIMU();
     }
 
-    // Hardware Reset LoRa
     pinMode(LORA_RST_PIN, OUTPUT);
     digitalWrite(LORA_RST_PIN, HIGH);
     delay(10);
@@ -312,14 +389,12 @@ void setup() {
     if (SD.begin(SD_CS_PIN, SPI, 1000000)) { 
         sdInitialized = true;
         
-        // Initialize flight telemetry log
         logFile = SD.open("/flight_log.csv", FILE_APPEND);
         if (logFile) {
-            logFile.println("HEADER,PACKET_ID,TIME_MS,PRESS_HPA,TEMP_C,REL_ALT_M,AX,AY,AZ,GX,GY,GZ,GPS_FIX,GPS_LAT,GPS_LON,GPS_ALT,GPS_SATS,APOGEE");
+            logFile.println("HEADER,PACKET_ID,TIME_MS,PRESS_HPA,TEMP_C,REL_ALT_M,VERT_VEL_MPS,AX,AY,AZ,GX,GY,GZ,GPS_FIX,GPS_LAT,GPS_LON,GPS_ALT,GPS_SATS,APOGEE");
             logFile.flush();
         }
 
-        // Initialize LoRa packet log header if missing
         if (!SD.exists("/lora_packet_log.csv")) {
             File loraLog = SD.open("/lora_packet_log.csv", FILE_WRITE);
             if (loraLog) {
