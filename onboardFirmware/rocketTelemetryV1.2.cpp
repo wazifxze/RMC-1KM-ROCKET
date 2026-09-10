@@ -98,7 +98,7 @@ void writeServo(int angle) {
 }
 
 void calibrateIMU() {
-    const int samples = 100; // Reduced from 500 to prevent startup delays/hangs
+    const int samples = 100;
     float sum_ax = 0, sum_ay = 0, sum_az = 0;
     float sum_gx = 0, sum_gy = 0, sum_gz = 0;
 
@@ -121,7 +121,7 @@ void calibrateIMU() {
     
     ax_offset = sum_ax / samples;
     ay_offset = sum_ay / samples;
-    az_offset = (sum_az / samples) - 1.0f; // Calibrates rest state to precisely 1.0g vertical
+    az_offset = (sum_az / samples) - 1.0f;
     gx_offset = sum_gx / samples;
     gy_offset = sum_gy / samples;
     gz_offset = sum_gz / samples;
@@ -138,34 +138,28 @@ void calibrateGroundPressure() {
     ground_pressure_hpa = sum_pressure / samples;
 }
 
-// Fuses IMU vertical acceleration and BME280 barometric altitude
 void updateKalmanFilter(float baro_alt, float accel_z_g, float dt) {
     if (dt <= 0.001f) return;
 
-    // Convert vertical Gs to m/s^2 (subtracting 1g gravity constant)
     float a_vert = (accel_z_g - 1.0f) * 9.81f;
 
-    // 1. Prediction Step
     kf_alt += kf_vel * dt + 0.5f * a_vert * dt * dt;
     kf_vel += a_vert * dt;
 
-    // Covariance extrapolation: P = F * P * F^T + Q
     P_00 += dt * (P_10 + P_01 + dt * P_11) + Q_ACCEL * dt * dt;
     P_01 += dt * P_11;
     P_10 += dt * P_11;
     P_11 += Q_ACCEL * dt;
 
-    // 2. Innovation Step (Barometer Correction)
     float y = baro_alt - kf_alt; 
     float S = P_00 + R_BARO;    
 
-    float K_0 = P_00 / S; // Kalman gain (Altitude)
-    float K_1 = P_10 / S; // Kalman gain (Velocity)
+    float K_0 = P_00 / S; 
+    float K_1 = P_10 / S; 
 
     kf_alt += K_0 * y;
     kf_vel += K_1 * y;
 
-    // Covariance Update: P = (I - K * H) * P
     float P00_temp = P_00;
     float P01_temp = P_01;
 
@@ -207,24 +201,19 @@ void TaskSensorSampling(void *pvParameters) {
             packet.gx = 0; packet.gy = 0; packet.gz = 0;
         }
 
-        // Run 1D Kalman Filter Fusion
         updateKalmanFilter(packet.baro_alt, packet.az, dt);
         packet.vert_vel = kf_vel;
 
-        // Track Peak Altitude
         if (packet.baro_alt > max_altitude) {
             max_altitude = packet.baro_alt;
         }
 
-        // --- HYBRID APOGEE DETECTION ---
         if (!apogee_triggered) {
-            // 1. Dual Safety Arming (Requires clearance altitude AND upward velocity)
             if (!system_armed && (packet.baro_alt >= MIN_ARM_ALT_M) && (packet.vert_vel >= MIN_ARM_VELOCITY_MPS)) {
                 system_armed = true;
                 Serial.printf("[ARMED] Hybrid criteria met! Alt: %.2f m | Vel: %.2f m/s\n", packet.baro_alt, packet.vert_vel);
             }
 
-            // 2. Redundant Deployment Triggering
             if (system_armed) {
                 bool primary_zero_vel = (packet.vert_vel <= APOGEE_VEL_TRIGGER);
                 bool backup_baro_drop = ((max_altitude - packet.baro_alt) >= APOGEE_ALT_DROP_FALLBACK);
@@ -257,7 +246,6 @@ void TaskSensorSampling(void *pvParameters) {
 void TaskRadioAndLogging(void *pvParameters) {
     TelemetryPacket packet;
     for (;;) {
-        // Handle incoming manual override commands over LoRa
         if (loraInitialized) {
             int packetSize = LoRa.parsePacket();
             if (packetSize) {
@@ -294,7 +282,6 @@ void TaskRadioAndLogging(void *pvParameters) {
             }
         }
 
-        // Handle downlink telemetry and SD recording
         if (xQueueReceive(telemetryQueue, &packet, pdMS_TO_TICKS(5)) == pdTRUE) {
             String csvPacket  = "$CANSAT,";
             csvPacket += String(packet.packet_id) + ",";
@@ -343,6 +330,7 @@ void setup() {
     digitalWrite(ONBOARD_LED, LOW); 
     delay(1000); 
 
+    Serial.println("[SETUP] Initializing Servo and GPS...");
     pinMode(SD_CS_PIN, OUTPUT);
     digitalWrite(SD_CS_PIN, HIGH);
     pinMode(LORA_CS_PIN, OUTPUT);
@@ -360,26 +348,35 @@ void setup() {
     GPSSerial.begin(9600, SERIAL_8N1, GPS_RX_PIN, GPS_TX_PIN);
     telemetryQueue = xQueueCreate(20, sizeof(TelemetryPacket));
 
-    // Configure I2C with Timeout Guard to Prevent Deadlocks
+    Serial.println("[SETUP] Initializing I2C Bus...");
     Wire.begin(I2C_SDA_PIN, I2C_SCL_PIN);
     Wire.setClock(100000); 
-    Wire.setTimeOut(1000); // 1-second timeout prevents infinite bus lockup
+    Wire.setTimeOut(1000);
 
+    Serial.println("[SETUP] Checking BME280 Barometer...");
     if (bme.begin(0x76, &Wire) || bme.begin(0x77, &Wire)) {
         calibrateGroundPressure();
+        Serial.println("[SETUP] BME280 Ready.");
+    } else {
+        Serial.println("[WARNING] BME280 Barometer not found!");
     }
 
-    // Try I2C addresses 0x69 then 0x68 for BMI160
+    Serial.println("[SETUP] Checking BMI160 IMU...");
     if (BMI160.begin(BMI160GenClass::I2C_MODE, Wire, 0x69) || 
         BMI160.begin(BMI160GenClass::I2C_MODE, Wire, 0x68)) {
         imuInitialized = true;
         BMI160.setFullScaleAccelRange(BMI160_ACCEL_RANGE_16G);
         BMI160.setFullScaleGyroRange(BMI160_GYRO_RANGE_2000);
-        calibrateIMU();
+        calibrateIMU(); // Completes successfully
     } else {
-        Serial.println("[WARNING] BMI160 IMU not detected! Check I2C wiring.");
+        Serial.println("[WARNING] BMI160 IMU not detected!");
     }
 
+    // Explicit SPI Bus CS Guard
+    digitalWrite(SD_CS_PIN, HIGH);
+    digitalWrite(LORA_CS_PIN, HIGH);
+
+    Serial.println("[SETUP] Resetting LoRa transceiver hardware...");
     pinMode(LORA_RST_PIN, OUTPUT);
     digitalWrite(LORA_RST_PIN, HIGH);
     delay(10);
@@ -388,21 +385,31 @@ void setup() {
     digitalWrite(LORA_RST_PIN, HIGH);
     delay(50);
 
+    Serial.println("[SETUP] Starting SPI Bus...");
     SPI.begin(SPI_SCK_PIN, SPI_MISO_PIN, SPI_MOSI_PIN, SD_CS_PIN);
-    
+
+    Serial.println("[SETUP] Testing LoRa Radio...");
     LoRa.setPins(LORA_CS_PIN, LORA_RST_PIN, LORA_DIO0_PIN);
     LoRa.setSPI(SPI);
     LoRa.setSPIFrequency(1000000);
 
+    digitalWrite(SD_CS_PIN, HIGH);
+    digitalWrite(LORA_CS_PIN, LOW);
     if (LoRa.begin(433E6)) { 
         loraInitialized = true;
         LoRa.setTxPower(20);          
         LoRa.setSpreadingFactor(7);   
         LoRa.setSignalBandwidth(125E3);
         LoRa.enableCrc();
+        Serial.println("[SETUP] LoRa Radio Initialized Successfully.");
+    } else {
+        Serial.println("[WARNING] LoRa initialization failed or module disconnected.");
     }
     digitalWrite(LORA_CS_PIN, HIGH);
 
+    Serial.println("[SETUP] Initializing SD Card Module...");
+    digitalWrite(LORA_CS_PIN, HIGH);
+    digitalWrite(SD_CS_PIN, LOW);
     if (SD.begin(SD_CS_PIN, SPI, 1000000)) { 
         sdInitialized = true;
         
@@ -419,13 +426,19 @@ void setup() {
                 loraLog.close();
             }
         }
+        Serial.println("[SETUP] SD Card Log Files Initialized.");
+    } else {
+        Serial.println("[WARNING] SD Card failed or not present.");
     }
     digitalWrite(SD_CS_PIN, HIGH);
 
     digitalWrite(ONBOARD_LED, HIGH); 
 
+    Serial.println("[SETUP] Launching FreeRTOS Flight Tasks...");
     xTaskCreatePinnedToCore(TaskSensorSampling, "SamplingTask", 4096, NULL, 2, NULL, 1);
     xTaskCreatePinnedToCore(TaskRadioAndLogging, "DownlinkTask", 8192, NULL, 1, NULL, 0);
+
+    Serial.println("[SETUP] Setup complete! Flight computer running.");
 }
 
 void loop() {
