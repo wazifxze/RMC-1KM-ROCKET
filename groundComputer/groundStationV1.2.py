@@ -1,19 +1,37 @@
-import serial
-import math
+import os
+import sys
 import csv
 import time
-from vpython import *
-import gps_map_server
-
-# Start GPS server for map visualisation
-gps_map_server.start_server(port=8000)
+import math
+import serial
+import numpy as np
+import matplotlib
+matplotlib.use('TkAgg')  # Interactive GUI backend
+import matplotlib.pyplot as plt
 
 # ==========================================
-# 1. TELEMETRY CSV LOGGING SETUP
+# 1. CONFIGURATION & OFFLINE MAP BOUNDS
 # ==========================================
-# Generates a unique timestamped file for every session (e.g., flight_log_1725900000.csv)
+SERIAL_PORT = 'COM7'
+BAUD_RATE = 115200
+
+# Path to your downloaded map image (PNG, JPG, or WEBP)
+MAP_IMAGE_PATH = 'map.png'
+
+# Geographic bounding box of your downloaded map image
+MAP_BOUNDS = {
+    'lon_min': 101.6500,  # Left longitude edge
+    'lon_max': 101.7500,  # Right longitude edge
+    'lat_min': 3.0000,    # Bottom latitude edge
+    'lat_max': 3.1000     # Top latitude edge
+}
+
+MAX_PLOT_POINTS = 500  # Rolling window size for performance
+
+# ==========================================
+# 2. TELEMETRY LOG FILE SETUP
+# ==========================================
 LOG_FILENAME = f"flight_log_{int(time.time())}.csv"
-
 csv_file = open(LOG_FILENAME, "a", newline="", encoding="utf-8")
 csv_writer = csv.writer(csv_file)
 
@@ -23,119 +41,107 @@ CSV_HEADERS = [
     "GPS_FIX", "GPS_LAT", "GPS_LON", "GPS_ALT", "GPS_SATS",
     "APOGEE_TRIGGERED", "RSSI", "SNR"
 ]
-
-if csv_file.tell() == 0:
-    csv_writer.writerow(CSV_HEADERS)
-    csv_file.flush()
-
-print(f"[LOGGING] Active telemetry recording to disk -> '{LOG_FILENAME}'")
+csv_writer.writerow(CSV_HEADERS)
+csv_file.flush()
+print(f"[LOGGING] Active recording -> '{LOG_FILENAME}'")
 
 # ==========================================
-# 2. 3D VISUALIZATION CANVAS & SCENE SETUP
+# 3. REAL-TIME 6-PANEL UI SETUP
 # ==========================================
-scene = canvas(
-    title="MRCC Rocket Telemetry Ground Station",
-    width=600,
-    height=550,
-    align="left",
-    center=vector(0, 0, 0),
-    background=color.gray(0.08)
-)
+plt.style.use('seaborn-v0_8-darkgrid' if 'seaborn-v0_8-darkgrid' in plt.style.available else 'default')
+plt.ion()  # Enable interactive mode for real-time updating
 
-scene.select()
-scene.up = vector(0, 0, 1)            # Aerospace Z-Up
-scene.forward = vector(-1, -1, -0.8)  # Isometric perspective
-scene.range = 3.5                     # Fixed view distance
-scene.autoscale = False               # Prevent camera jumps
+fig, axs = plt.subplots(3, 2, figsize=(15, 11))
+fig.canvas.manager.set_window_title('Live Rocket Telemetry Ground Station')
+fig.suptitle('Real-Time Rocket Flight Telemetry & Map Tracking', fontsize=16, fontweight='bold')
 
-ROCKET_LENGTH = 2.5
-rocket = cylinder(
-    pos=vector(0, 0, -ROCKET_LENGTH / 2),
-    axis=vector(0, 0, ROCKET_LENGTH),
-    radius=0.35,
-    color=color.orange
-)
+# Panel 1: Altitude Profile
+axs[0, 0].set_title('Altitude Profile')
+axs[0, 0].set_ylabel('Altitude (m)')
+line_alt, = axs[0, 0].plot([], [], color='tab:blue', label='Altitude (m)')
+point_apogee, = axs[0, 0].plot([], [], 'ro', label='Apogee')
+axs[0, 0].legend(loc='upper left')
 
-nosecone = cone(
-    pos=vector(0, 0, ROCKET_LENGTH / 2),
-    axis=vector(0, 0, 0.6),
-    radius=0.35,
-    color=color.red
-)
+# Panel 2: Vertical Velocity Profile
+axs[0, 1].set_title('Vertical Velocity Profile')
+axs[0, 1].set_ylabel('Velocity (m/s)')
+line_vel, = axs[0, 1].plot([], [], color='tab:green', label='Vert Speed (m/s)')
+axs[0, 1].axhline(0, color='gray', linestyle='--')
+axs[0, 1].legend(loc='upper left')
 
-grid_plane = box(
-    pos=vector(0, 0, -ROCKET_LENGTH / 2 - 0.05),
-    size=vector(6, 6, 0.05),
-    color=color.gray(0.3)
-)
+# Panel 3: Accelerations & Loads
+axs[1, 0].set_title('Acceleration & Loads')
+axs[1, 0].set_ylabel('Acceleration (G)')
+line_accel, = axs[1, 0].plot([], [], color='tab:orange', label='Total Load (G)')
+axs[1, 0].legend(loc='upper left')
 
-telemetry_label = label(
-    pos=vector(-2.5, 0, 2.5),
-    text="Awaiting Rocket Telemetry Link...",
-    xoffset=10, yoffset=10,
-    space=10, height=11,
-    border=4, font='sans'
-)
+# Panel 4: Airframe Tilt
+axs[1, 1].set_title('Estimated Airframe Tilt')
+axs[1, 1].set_ylabel('Tilt Angle (deg)')
+line_tilt, = axs[1, 1].plot([], [], color='tab:olive', label='Off-Vertical Tilt (°)')
+axs[1, 1].legend(loc='upper left')
 
-# ==========================================
-# 3. REAL-TIME GRAPH WINDOWS SETUP
-# ==========================================
-MAX_GRAPH_POINTS = 300
+# Panel 5: Angular Velocities (Gyro)
+axs[2, 0].set_title('Angular Velocities')
+axs[2, 0].set_xlabel('Flight Time (s)')
+axs[2, 0].set_ylabel('Rate (deg/s)')
+line_gx, = axs[2, 0].plot([], [], label='GX (Roll)', alpha=0.7)
+line_gy, = axs[2, 0].plot([], [], label='GY (Pitch)', alpha=0.7)
+line_gz, = axs[2, 0].plot([], [], label='GZ (Yaw)', alpha=0.7)
+axs[2, 0].legend(loc='upper left')
 
-graph_alt = graph(
-    title="<b>Barometric Altitude (m)</b>",
-    xtitle="Flight Time (s)", ytitle="Altitude (m)",
-    width=520, height=170, align="right", background=color.gray(0.12)
-)
-curve_alt = gcurve(color=color.cyan, width=2, graph=graph_alt)
+# Panel 6: Live Offline GPS Map
+ax_map = axs[2, 1]
+ax_map.set_title('Live Ground Track (Offline Map)')
+ax_map.set_xlabel('Longitude (°)')
+ax_map.set_ylabel('Latitude (°)')
 
-graph_accel = graph(
-    title="<b>Linear Accelerations (G)</b>",
-    xtitle="Flight Time (s)", ytitle="G-Force",
-    width=520, height=170, align="right", background=color.gray(0.12)
-)
-curve_ax = gcurve(color=color.red, label="AX", width=1.5, graph=graph_accel)
-curve_ay = gcurve(color=color.green, label="AY", width=1.5, graph=graph_accel)
-curve_az = gcurve(color=color.blue, label="AZ", width=1.5, graph=graph_accel)
+if os.path.exists(MAP_IMAGE_PATH):
+    map_img = plt.imread(MAP_IMAGE_PATH)
+    ax_map.imshow(
+        map_img,
+        extent=[MAP_BOUNDS['lon_min'], MAP_BOUNDS['lon_max'], MAP_BOUNDS['lat_min'], MAP_BOUNDS['lat_max']],
+        aspect='auto'
+    )
+    print(f"[MAP] Loaded offline map image: '{MAP_IMAGE_PATH}'")
+else:
+    ax_map.text(0.5, 0.5, f"Map image '{MAP_IMAGE_PATH}' not found!\nPlotting coordinates on grid.",
+                ha='center', va='center', transform=ax_map.transAxes, color='red')
+    print(f"[WARNING] Map file '{MAP_IMAGE_PATH}' missing. Falling back to simple GPS scatter.")
 
-graph_attitude = graph(
-    title="<b>Attitude / Orientation (deg)</b>",
-    xtitle="Flight Time (s)", ytitle="Degrees (°)",
-    width=520, height=170, align="right", background=color.gray(0.12)
-)
-curve_pitch = gcurve(color=color.orange, label="Pitch", width=1.5, graph=graph_attitude)
-curve_roll  = gcurve(color=color.magenta, label="Roll", width=1.5, graph=graph_attitude)
-curve_yaw   = gcurve(color=color.yellow, label="Yaw", width=1.5, graph=graph_attitude)
+line_gps_track, = ax_map.plot([], [], 'y-', linewidth=2, label='Flight Path')
+point_gps_current, = ax_map.plot([], [], 'r*', markersize=12, label='Rocket Position')
+ax_map.legend(loc='upper right')
+
+plt.tight_layout()
 
 # ==========================================
-# 4. SERIAL PORT CONFIGURATION
+# 4. DATA BUFFERS & SERIAL INITIALIZATION
 # ==========================================
-SERIAL_PORT = 'COM7'
-BAUD_RATE = 115200
+time_sec_list = []
+baro_alt_list = []
+vert_vel_list = []
+total_accel_list = []
+tilt_deg_list = []
+gx_list, gy_list, gz_list = [], [], []
+gps_lat_list, gps_lon_list = [], []
+
+start_time_ms = None
+apogee_alt = 0.0
+apogee_time = 0.0
 
 try:
     ser = serial.Serial(SERIAL_PORT, BAUD_RATE, timeout=0.02)
-    print(f"[ONLINE] Ground Station linked to {SERIAL_PORT} at {BAUD_RATE} baud.")
+    print(f"[ONLINE] Serial connected to {SERIAL_PORT} @ {BAUD_RATE} baud.")
 except Exception as e:
-    print(f"[WARNING] Serial port connection failed: {e}")
+    print(f"[WARNING] Serial connection error: {e}")
     ser = None
 
-pitch_deg = 0.0
-roll_deg  = 0.0
-yaw_deg   = 0.0
-
-last_timestamp_ms = None
-last_packet_id = None
-total_received = 0
-total_dropped = 0
-
 # ==========================================
-# 5. LIVE PARSING, LOGGING & RENDER LOOP
+# 5. LIVE PROCESSING & RENDERING LOOP
 # ==========================================
 try:
-    while True:
-        rate(60)
-
+    while plt.fignum_exists(fig.number):
         if ser and ser.in_waiting > 0:
             try:
                 line = ser.readline().decode('utf-8', errors='ignore').strip()
@@ -147,124 +153,108 @@ try:
                     if len(fields) < 17:
                         continue
 
-                    packet_id        = int(fields[0])
-                    timestamp_ms     = int(fields[1])
-                    pressure         = float(fields[2])
-                    temperature      = float(fields[3])
-                    baro_alt         = float(fields[4])
-                    ax               = float(fields[5])
-                    ay               = float(fields[6])
-                    az               = float(fields[7])
-                    gx               = float(fields[8])
-                    gy               = float(fields[9])
-                    gz               = float(fields[10])
-                    gps_fix          = int(fields[11])
-                    gps_lat          = float(fields[12])
-                    gps_lon          = float(fields[13])
-                    gps_alt          = float(fields[14])
-                    gps_sats         = int(fields[15])
-                    apogee_triggered = int(fields[16])
+                    packet_id    = int(fields[0])
+                    timestamp_ms = int(fields[1])
+                    pressure     = float(fields[2])
+                    temperature  = float(fields[3])
+                    baro_alt     = float(fields[4])
+                    ax, ay, az   = float(fields[5]), float(fields[6]), float(fields[7])
+                    gx, gy, gz   = float(fields[8]), float(fields[9]), float(fields[10])
+                    gps_fix      = int(fields[11])
+                    gps_lat      = float(fields[12])
+                    gps_lon      = float(fields[13])
+                    gps_alt      = float(fields[14])
+                    gps_sats     = int(fields[15])
+                    apogee_trig  = int(fields[16])
+                    rssi         = int(fields[17]) if len(fields) > 17 else -1
+                    snr          = float(fields[18]) if len(fields) > 18 else 0.0
 
-                    rssi = int(fields[17]) if len(fields) > 17 else -1
-                    snr  = float(fields[18]) if len(fields) > 18 else 0.0
-
-                    time_sec = timestamp_ms / 1000.0
-
-                    # --- IMMEDIATE DISK WRITE ---
+                    # --- CSV RECORDING ---
                     csv_writer.writerow([
                         packet_id, timestamp_ms, pressure, temperature, baro_alt,
                         ax, ay, az, gx, gy, gz,
                         gps_fix, gps_lat, gps_lon, gps_alt, gps_sats,
-                        apogee_triggered, rssi, snr
+                        apogee_trig, rssi, snr
                     ])
-                    csv_file.flush()  # Prevents data loss during sudden disconnects or power drops
+                    csv_file.flush()
 
-                    # --- GPS WEB MAP UPDATER ---
-                    gps_map_server.update_gps(gps_lat, gps_lon, gps_alt, gps_fix, gps_sats, timestamp_ms)
+                    # --- TIME & KINEMATIC DERIVATIONS ---
+                    if start_time_ms is None:
+                        start_time_ms = timestamp_ms
 
-                    # --- PACKET METRICS ---
-                    total_received += 1
-                    if last_packet_id is not None:
-                        gap = packet_id - (last_packet_id + 1)
-                        if gap > 0:
-                            total_dropped += gap
-                    last_packet_id = packet_id
+                    t_sec = (timestamp_ms - start_time_ms) / 1000.0
+                    total_accel = math.sqrt(ax**2 + ay**2 + az**2)
+                    tilt_deg = math.degrees(math.atan2(math.sqrt(ax**2 + ay**2), abs(az)))
 
-                    total_expected = total_received + total_dropped
-                    loss_percentage = (total_dropped / total_expected * 100.0) if total_expected > 0 else 0.0
+                    # Velocity calculation via finite differences
+                    v_z = 0.0
+                    if len(time_sec_list) > 0:
+                        dt = t_sec - time_sec_list[-1]
+                        if dt > 0:
+                            v_z = (baro_alt - baro_alt_list[-1]) / dt
 
-                    # --- COMPLEMENTARY ATTITUDE FILTER ---
-                    if last_timestamp_ms is not None:
-                        dt = (timestamp_ms - last_timestamp_ms) / 1000.0
-                        
-                        if 0.0 < dt < 2.0:
-                            denom = math.sqrt(ay**2 + az**2)
-                            accel_pitch = math.degrees(math.atan2(ax, denom if denom != 0 else 0.001))
-                            accel_roll  = math.degrees(math.atan2(ay, math.sqrt(ax**2 + az**2)))
+                    # Track Apogee
+                    if baro_alt > apogee_alt:
+                        apogee_alt = baro_alt
+                        apogee_time = t_sec
 
-                            total_accel = math.sqrt(ax**2 + ay**2 + az**2)
-                            alpha = 0.98 if (0.85 < total_accel < 1.15) else 1.0
+                    # Append metrics
+                    time_sec_list.append(t_sec)
+                    baro_alt_list.append(baro_alt)
+                    vert_vel_list.append(v_z)
+                    total_accel_list.append(total_accel)
+                    tilt_deg_list.append(tilt_deg)
+                    gx_list.append(gx)
+                    gy_list.append(gy)
+                    gz_list.append(gz)
 
-                            pitch_deg = alpha * (pitch_deg + gy * dt) + (1.0 - alpha) * accel_pitch
-                            roll_deg  = alpha * (roll_deg  + gx * dt) + (1.0 - alpha) * accel_roll
-                            yaw_deg  += gz * dt
+                    if gps_fix > 0 and gps_lat != 0.0:
+                        gps_lat_list.append(gps_lat)
+                        gps_lon_list.append(gps_lon)
 
-                    last_timestamp_ms = timestamp_ms
+                    # Maintain memory buffers
+                    if len(time_sec_list) > MAX_PLOT_POINTS:
+                        time_sec_list.pop(0)
+                        baro_alt_list.pop(0)
+                        vert_vel_list.pop(0)
+                        total_accel_list.pop(0)
+                        tilt_deg_list.pop(0)
+                        gx_list.pop(0)
+                        gy_list.pop(0)
+                        gz_list.pop(0)
 
-                    # --- 3D TRANSFORM ---
-                    if not (math.isnan(pitch_deg) or math.isnan(roll_deg) or math.isnan(yaw_deg)):
-                        pitch_rad = math.radians(pitch_deg)
-                        roll_rad  = math.radians(roll_deg)
-                        yaw_rad   = math.radians(yaw_deg)
+                    # --- REAL-TIME UI PLOT UPDATE ---
+                    line_alt.set_data(time_sec_list, baro_alt_list)
+                    point_apogee.set_data([apogee_time], [apogee_alt])
+                    line_vel.set_data(time_sec_list, vert_vel_list)
+                    line_accel.set_data(time_sec_list, total_accel_list)
+                    line_tilt.set_data(time_sec_list, tilt_deg_list)
 
-                        dir_x = math.sin(roll_rad) * math.cos(pitch_rad)
-                        dir_y = -math.sin(pitch_rad)
-                        dir_z = math.cos(roll_rad) * math.cos(pitch_rad)
+                    line_gx.set_data(time_sec_list, gx_list)
+                    line_gy.set_data(time_sec_list, gy_list)
+                    line_gz.set_data(time_sec_list, gz_list)
 
-                        orient_vec = vector(dir_x, dir_y, dir_z).norm()
-                        orient_vec = orient_vec.rotate(angle=yaw_rad, axis=vector(0, 0, 1))
+                    if len(gps_lat_list) > 0:
+                        line_gps_track.set_data(gps_lon_list, gps_lat_list)
+                        point_gps_current.set_data([gps_lon_list[-1]], [gps_lat_list[-1]])
 
-                        rocket.axis = orient_vec * ROCKET_LENGTH
-                        rocket.pos = -0.5 * rocket.axis
+                    # Autoscale X/Y axes dynamically
+                    for row in axs:
+                        for ax_item in row:
+                            if ax_item != ax_map:
+                                ax_item.relim()
+                                ax_item.autoscale_view()
 
-                        nosecone.axis = orient_vec * 0.6
-                        nosecone.pos = 0.5 * rocket.axis
+                    fig.canvas.draw()
+                    fig.canvas.flush_events()
 
-                    # --- LIVE PLOTTING ---
-                    curve_alt.plot(time_sec, baro_alt)
-                    curve_ax.plot(time_sec, ax)
-                    curve_ay.plot(time_sec, ay)
-                    curve_az.plot(time_sec, az)
-                    curve_pitch.plot(time_sec, pitch_deg)
-                    curve_roll.plot(time_sec, roll_deg)
-                    curve_yaw.plot(time_sec, yaw_deg)
+            except Exception as err:
+                print(f"[PARSER ERROR] {err}")
 
-                    # --- BUFFER TRIMMING ---
-                    if len(curve_alt.data) > MAX_GRAPH_POINTS:
-                        curve_alt.data   = curve_alt.data[-MAX_GRAPH_POINTS:]
-                        curve_ax.data    = curve_ax.data[-MAX_GRAPH_POINTS:]
-                        curve_ay.data    = curve_ay.data[-MAX_GRAPH_POINTS:]
-                        curve_az.data    = curve_az.data[-MAX_GRAPH_POINTS:]
-                        curve_pitch.data = curve_pitch.data[-MAX_GRAPH_POINTS:]
-                        curve_roll.data  = curve_roll.data[-MAX_GRAPH_POINTS:]
-                        curve_yaw.data   = curve_yaw.data[-MAX_GRAPH_POINTS:]
-
-                    # --- HUD OVERLAY ---
-                    apogee_status = "ARMED / STABLE" if not apogee_triggered else "DEPLOYED!"
-                    telemetry_label.text = (
-                        f"--- ROCKET TELEMETRY LINK ACTIVE ---\n"
-                        f"Packet ID: {packet_id} | Time: {time_sec:.2f} s\n"
-                        f"Rx Count: {total_received} | Dropped: {total_dropped} | Loss: {loss_percentage:.1f}%\n"
-                        f"Flight Status: Apogee State -> {apogee_status}\n"
-                        f"Baro Altitude: {baro_alt:.1f} m | Pressure: {pressure:.2f} hPa | Temp: {temperature:.1f} °C\n"
-                        f"GPS Fix: {gps_fix} | Sats: {gps_sats} | Lat/Lon: [{gps_lat:.6f}, {gps_lon:.6f}]\n"
-                        f"Pitch: {pitch_deg:.1f}° | Roll: {roll_deg:.1f}° | Yaw: {yaw_deg:.1f}°\n"
-                        f"Accel [G]: [{ax:.2f}, {ay:.2f}, {az:.2f}] | Gyro [°/s]: [{gx:.1f}, {gy:.1f}, {gz:.1f}]"
-                    )
-            except Exception as parse_error:
-                print(f"[FRAME WARNING] Parse error: {parse_error}")
+        plt.pause(0.01)
 
 finally:
-    # Ensure safe handle release if script is killed
     csv_file.close()
-    print("\n[LOGGING] Telemetry file handle safely closed.")
+    if ser:
+        ser.close()
+    print("\n[SHUTDOWN] Resources safely released.")
