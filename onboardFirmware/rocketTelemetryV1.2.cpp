@@ -56,8 +56,9 @@ QueueHandle_t telemetryQueue;
 
 Adafruit_BME280 bme;
 File logFile;
-bool sdInitialized = false;
+bool sdInitialized   = false;
 bool loraInitialized = false;
+bool imuInitialized  = false;
 
 // Calibration & State Variables
 float ax_offset = 0.0, ay_offset = 0.0, az_offset = 0.0;
@@ -97,30 +98,34 @@ void writeServo(int angle) {
 }
 
 void calibrateIMU() {
-    const int samples = 500;
+    const int samples = 100; // Reduced from 500 to prevent startup delays/hangs
     float sum_ax = 0, sum_ay = 0, sum_az = 0;
     float sum_gx = 0, sum_gy = 0, sum_gz = 0;
 
     Serial.println("[INFO] Calibrating IMU...");
     for (int i = 0; i < samples; i++) {
-        int rawAx, rawAy, rawAz;
-        int rawGx, rawGy, rawGz;
+        int rawAx = 0, rawAy = 0, rawAz = 0;
+        int rawGx = 0, rawGy = 0, rawGz = 0;
+        
         BMI160.readAccelerometer(rawAx, rawAy, rawAz);
         BMI160.readGyro(rawGx, rawGy, rawGz);
+        
         sum_ax += (float)rawAx / 2048.0f;
         sum_ay += (float)rawAy / 2048.0f;
         sum_az += (float)rawAz / 2048.0f;
         sum_gx += (float)rawGx / 16.4f;
         sum_gy += (float)rawGy / 16.4f;
         sum_gz += (float)rawGz / 16.4f;
-        delay(5);
+        delay(2);
     }
+    
     ax_offset = sum_ax / samples;
     ay_offset = sum_ay / samples;
     az_offset = (sum_az / samples) - 1.0f; // Calibrates rest state to precisely 1.0g vertical
     gx_offset = sum_gx / samples;
     gy_offset = sum_gy / samples;
     gz_offset = sum_gz / samples;
+    Serial.println("[INFO] IMU Calibration Complete.");
 }
 
 void calibrateGroundPressure() {
@@ -186,16 +191,21 @@ void TaskSensorSampling(void *pvParameters) {
         packet.temperature = bme.readTemperature();
         packet.baro_alt = bme.readAltitude(ground_pressure_hpa);
 
-        int rawAx, rawAy, rawAz, rawGx, rawGy, rawGz;
-        BMI160.readAccelerometer(rawAx, rawAy, rawAz);
-        BMI160.readGyro(rawGx, rawGy, rawGz);
+        if (imuInitialized) {
+            int rawAx, rawAy, rawAz, rawGx, rawGy, rawGz;
+            BMI160.readAccelerometer(rawAx, rawAy, rawAz);
+            BMI160.readGyro(rawGx, rawGy, rawGz);
 
-        packet.ax = ((float)rawAx / 2048.0f) - ax_offset;
-        packet.ay = ((float)rawAy / 2048.0f) - ay_offset;
-        packet.az = ((float)rawAz / 2048.0f) - az_offset;
-        packet.gx = ((float)rawGx / 16.4f) - gx_offset;
-        packet.gy = ((float)rawGy / 16.4f) - gy_offset;
-        packet.gz = ((float)rawGz / 16.4f) - gz_offset;
+            packet.ax = ((float)rawAx / 2048.0f) - ax_offset;
+            packet.ay = ((float)rawAy / 2048.0f) - ay_offset;
+            packet.az = ((float)rawAz / 2048.0f) - az_offset;
+            packet.gx = ((float)rawGx / 16.4f) - gx_offset;
+            packet.gy = ((float)rawGy / 16.4f) - gy_offset;
+            packet.gz = ((float)rawGz / 16.4f) - gz_offset;
+        } else {
+            packet.ax = 0; packet.ay = 0; packet.az = 1.0f;
+            packet.gx = 0; packet.gy = 0; packet.gz = 0;
+        }
 
         // Run 1D Kalman Filter Fusion
         updateKalmanFilter(packet.baro_alt, packet.az, dt);
@@ -350,17 +360,24 @@ void setup() {
     GPSSerial.begin(9600, SERIAL_8N1, GPS_RX_PIN, GPS_TX_PIN);
     telemetryQueue = xQueueCreate(20, sizeof(TelemetryPacket));
 
+    // Configure I2C with Timeout Guard to Prevent Deadlocks
     Wire.begin(I2C_SDA_PIN, I2C_SCL_PIN);
     Wire.setClock(100000); 
+    Wire.setTimeOut(1000); // 1-second timeout prevents infinite bus lockup
 
     if (bme.begin(0x76, &Wire) || bme.begin(0x77, &Wire)) {
         calibrateGroundPressure();
     }
 
-    if (BMI160.begin(BMI160GenClass::I2C_MODE, Wire, 0x69)) {
+    // Try I2C addresses 0x69 then 0x68 for BMI160
+    if (BMI160.begin(BMI160GenClass::I2C_MODE, Wire, 0x69) || 
+        BMI160.begin(BMI160GenClass::I2C_MODE, Wire, 0x68)) {
+        imuInitialized = true;
         BMI160.setFullScaleAccelRange(BMI160_ACCEL_RANGE_16G);
         BMI160.setFullScaleGyroRange(BMI160_GYRO_RANGE_2000);
         calibrateIMU();
+    } else {
+        Serial.println("[WARNING] BMI160 IMU not detected! Check I2C wiring.");
     }
 
     pinMode(LORA_RST_PIN, OUTPUT);
