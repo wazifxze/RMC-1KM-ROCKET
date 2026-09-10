@@ -36,7 +36,7 @@ csv_file = open(LOG_FILENAME, "a", newline="", encoding="utf-8")
 csv_writer = csv.writer(csv_file)
 
 CSV_HEADERS = [
-    "PACKET_ID", "TIME_MS", "PRESS_HPA", "TEMP_C", "BARO_ALT",
+    "PACKET_ID", "TIME_MS", "PRESS_HPA", "TEMP_C", "BARO_ALT", "VERT_VEL",
     "AX", "AY", "AZ", "GX", "GY", "GZ",
     "GPS_FIX", "GPS_LAT", "GPS_LON", "GPS_ALT", "GPS_SATS",
     "APOGEE_TRIGGERED", "RSSI", "SNR"
@@ -150,7 +150,7 @@ try:
                     clean_payload = line[8:-1]
                     fields = clean_payload.split(",")
 
-                    if len(fields) < 17:
+                    if len(fields) < 18:
                         continue
 
                     packet_id    = int(fields[0])
@@ -158,20 +158,21 @@ try:
                     pressure     = float(fields[2])
                     temperature  = float(fields[3])
                     baro_alt     = float(fields[4])
-                    ax, ay, az   = float(fields[5]), float(fields[6]), float(fields[7])
-                    gx, gy, gz   = float(fields[8]), float(fields[9]), float(fields[10])
-                    gps_fix      = int(fields[11])
-                    gps_lat      = float(fields[12])
-                    gps_lon      = float(fields[13])
-                    gps_alt      = float(fields[14])
-                    gps_sats     = int(fields[15])
-                    apogee_trig  = int(fields[16])
-                    rssi         = int(fields[17]) if len(fields) > 17 else -1
-                    snr          = float(fields[18]) if len(fields) > 18 else 0.0
+                    vert_vel     = float(fields[5])  # Fused velocity sent from flight computer
+                    ax, ay, az   = float(fields[6]), float(fields[7]), float(fields[8])
+                    gx, gy, gz   = float(fields[9]), float(fields[10]), float(fields[11])
+                    gps_fix      = int(float(fields[12]))
+                    gps_lat      = float(fields[13])
+                    gps_lon      = float(fields[14])
+                    gps_alt      = float(fields[15])
+                    gps_sats     = int(float(fields[16]))
+                    apogee_trig  = int(float(fields[17]))
+                    rssi         = int(float(fields[18])) if len(fields) > 18 else -1
+                    snr          = float(fields[19]) if len(fields) > 19 else 0.0
 
                     # --- CSV RECORDING ---
                     csv_writer.writerow([
-                        packet_id, timestamp_ms, pressure, temperature, baro_alt,
+                        packet_id, timestamp_ms, pressure, temperature, baro_alt, vert_vel,
                         ax, ay, az, gx, gy, gz,
                         gps_fix, gps_lat, gps_lon, gps_alt, gps_sats,
                         apogee_trig, rssi, snr
@@ -186,13 +187,6 @@ try:
                     total_accel = math.sqrt(ax**2 + ay**2 + az**2)
                     tilt_deg = math.degrees(math.atan2(math.sqrt(ax**2 + ay**2), abs(az)))
 
-                    # Velocity calculation via finite differences
-                    v_z = 0.0
-                    if len(time_sec_list) > 0:
-                        dt = t_sec - time_sec_list[-1]
-                        if dt > 0:
-                            v_z = (baro_alt - baro_alt_list[-1]) / dt
-
                     # Track Apogee
                     if baro_alt > apogee_alt:
                         apogee_alt = baro_alt
@@ -201,7 +195,7 @@ try:
                     # Append metrics
                     time_sec_list.append(t_sec)
                     baro_alt_list.append(baro_alt)
-                    vert_vel_list.append(v_z)
+                    vert_vel_list.append(vert_vel)
                     total_accel_list.append(total_accel)
                     tilt_deg_list.append(tilt_deg)
                     gx_list.append(gx)
